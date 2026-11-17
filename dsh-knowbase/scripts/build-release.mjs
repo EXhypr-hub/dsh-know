@@ -136,11 +136,24 @@ if (buildOffline) {
   const depsTo = join(stagePkg, 'node_modules')
   mkdirSync(depsTo, { recursive: true })
   // Windows 上 robocopy 比逐个 copyFile 快得多；其它平台用 cp -a
+  // Windows 上 robocopy 比逐个 copyFile 快得多；其它平台用 cp -a
   if (process.platform === 'win32') {
-    execFileSync(process.env.ComSpec || 'cmd.exe', [
-      '/c', 'robocopy', depsFrom, depsTo, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns',
-    ], { stdio: 'ignore' })
-    // robocopy 用退出码 1 表示「成功复制了文件」，不是失败
+    try {
+      execFileSync(process.env.ComSpec || 'cmd.exe', [
+        '/c', 'robocopy', depsFrom, depsTo, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns',
+      ], { stdio: 'ignore' })
+    } catch (error) {
+      /*
+       * robocopy 的退出码不是错误码：
+       *   0 = 无需复制  1 = 成功复制了文件  2 = 有多余文件  3 = 1+2
+       *   4~7 = 部分不匹配但已处理
+       * 8 及以上才是真的失败。execFileSync 把非 0 都当异常，这里要放行 0~7。
+       */
+      const code = Number(error?.status)
+      if (!(code >= 0 && code <= 7)) {
+        throw new Error(`复制依赖失败（robocopy 退出码 ${code ?? '未知'}）`)
+      }
+    }
   } else {
     execFileSync('cp', ['-a', `${depsFrom}/.`, depsTo])
   }
@@ -161,10 +174,15 @@ if (buildOffline) {
 
   console.log('  压缩中（这一步最慢）…')
   if (process.platform === 'win32') {
-    execFileSync(process.env.ComSpec || 'cmd.exe', [
-      '/c', 'powershell', '-NoProfile', '-Command',
-      `Compress-Archive -Path '${stagePkg}' -DestinationPath '${zipPath}' -CompressionLevel Optimal`,
-    ], { stdio: 'inherit' })
+    /*
+     * 用 Windows 自带的 bsdtar，不用 PowerShell 的 Compress-Archive。
+     * 实测同一份 419MB / 3738 个文件：
+     *   Compress-Archive 跑了 1 分钟还停在 0 字节
+     *   bsdtar --format zip 12 秒完成
+     */
+    execFileSync('C:\\Windows\\System32\\tar.exe',
+      ['--format', 'zip', '-cf', zipPath, 'dsh-knowbase'],
+      { cwd: stage, stdio: 'inherit' })
   } else {
     execFileSync('bash', ['-c',
       `cd ${JSON.stringify(stage)} && zip -qr ${JSON.stringify(zipPath)} dsh-knowbase`,
