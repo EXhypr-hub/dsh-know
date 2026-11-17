@@ -18,6 +18,23 @@ import { join, extname, basename } from 'node:path'
 
 const SCHEMA_VERSION = 1
 
+/**
+ * 逐版本迁移。
+ *
+ * 目前仍是 v1，没有需要迁移的结构变更，所以这里保持空表。
+ * 以后任何一次改表结构，把 SCHEMA_VERSION 加 1 并在此登记对应步骤：
+ *   MIGRATIONS[2] = (db) => db.exec('ALTER TABLE documents ADD COLUMN foo TEXT')
+ * 迁移前会自动 VACUUM INTO 一份 kb.sqlite.bak-时间戳。
+ */
+const MIGRATIONS = {}
+
+/** 备份文件名用的时间戳：20261117-164200 */
+function formatStamp(date) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+    + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -139,9 +156,52 @@ export class KnowledgeStore {
     this.db.exec(SCHEMA)
 
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+
     if (row === undefined) {
+      // 全新库：直接记录当前版本
       this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION))
+      this.migratedFrom = null
+      return this
     }
+
+    const from = Number(row.value)
+    if (!Number.isFinite(from) || from > SCHEMA_VERSION) {
+      // 比当前版本还新：可能是降级安装，不动数据，但要提醒
+      this.migratedFrom = { from, to: SCHEMA_VERSION, backup: null, downgrade: true }
+      return this
+    }
+
+    if (from < SCHEMA_VERSION) {
+      /*
+       * 结构要变：先备份再迁移。
+       * 备份用 VACUUM INTO，产出的是完整一致的单文件（比复制 sqlite+wal 安全）。
+       */
+      const backupPath = join(this.dataRoot, `kb.sqlite.bak-${formatStamp(new Date())}`)
+      try {
+        this.db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`)
+      } catch (error) {
+        // 备份失败就不迁移，宁可停下也不能在没备份的情况下改结构
+        throw new Error(
+          `升级前自动备份失败，已中止迁移以保护数据：`
+          + `${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+
+      const applied = []
+      for (let version = from + 1; version <= SCHEMA_VERSION; version++) {
+        const step = MIGRATIONS[version]
+        if (typeof step === 'function') {
+          step(this.db)
+          applied.push(version)
+        }
+      }
+
+      this.db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(SCHEMA_VERSION), 'schema_version')
+      this.migratedFrom = { from, to: SCHEMA_VERSION, backup: backupPath, steps: applied }
+    } else {
+      this.migratedFrom = null
+    }
+
     return this
   }
 

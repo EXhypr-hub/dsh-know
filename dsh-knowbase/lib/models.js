@@ -77,6 +77,7 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
 
   const total = spec.files.length
   let done = 0
+  let verified = 0   // 完成 sha256 校验的文件数
   const failed = []
 
   for (const file of spec.files) {
@@ -112,6 +113,27 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
           errors.push(`${mirror.id}: 内容为空`)
           continue
         }
+
+        /*
+         * 完整性校验。
+         * HuggingFace 的 CDN 会在响应头里给出内容的 sha256
+         * （大文件在 x-linked-etag，小文件在 etag）。
+         * 有就比对，没有（比如镜像没透传）就只做大小校验并标记未验证。
+         */
+        const declared = String(res.headers.get('x-linked-etag') ?? res.headers.get('etag') ?? '')
+          .replace(/"/g, '')
+          .trim()
+          .toLowerCase()
+        let integrity = 'size-only'
+        if (/^[a-f0-9]{64}$/.test(declared)) {
+          const actual = await sha256Of(buffer)
+          if (actual !== declared) {
+            errors.push(`${mirror.id}: 哈希不匹配（期望 ${declared.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…）`)
+            continue
+          }
+          integrity = 'sha256'
+        }
+
         await writeFile(dest, buffer)
         ok = true
         break
@@ -125,6 +147,7 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
       continue
     }
     done++
+    if (integrity === 'sha256') verified++
     onProgress?.(done, total, file)
   }
 
@@ -133,7 +156,15 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
     throw new Error(`有 ${failed.length} 个文件下载失败：${summary}`)
   }
 
-  return { modelId, dir: targetDir, dimension: spec.dim, files: spec.files }
+  return {
+    modelId,
+    dir: targetDir,
+    dimension: spec.dim,
+    files: spec.files,
+    // verified: 通过 sha256 校验的文件数；其余只做了大小与非空校验
+    verified,
+    integrity: verified === total ? 'sha256' : verified > 0 ? 'partial' : 'size-only',
+  }
 }
 
 /** 检查某模型本地是否完整 */

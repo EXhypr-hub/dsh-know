@@ -834,7 +834,7 @@ await test('i18n 字典完整性', async () => {
   const lines = src.split('\n')
   const scopes = []
   for (let i = 0; i < lines.length; i++) {
-    if (/^    function (Panel|SidePane|SettingsPanel|LocalModelPicker|RerankPanel|FetchPanel)\b/.test(lines[i])) {
+    if (/^    function (Panel|SidePane|SettingsPanel|LocalModelPicker|RerankPanel|FetchPanel|StoragePanel)\b/.test(lines[i])) {
       let end = lines.length - 1
       for (let j = i + 1; j < lines.length; j++) {
         if (lines[j] === '    }') { end = j; break }
@@ -851,6 +851,99 @@ await test('i18n 字典完整性', async () => {
   if (outside.length) throw new Error(`t() 在组件外调用，行: ${outside.join(', ')}`)
 
   ok('i18n 字典完整性', `${uniqueZh.size} 条，${used.length} 个使用中，作用域正确`)
+})
+
+await test('数据库迁移与备份', async () => {
+  const { KnowledgeStore } = await import('../lib/store.js')
+  const { mkdtempSync, rmSync, readdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-'))
+  try {
+    // 全新库：不迁移
+    const fresh = await new KnowledgeStore(dir).open()
+    if (fresh.migratedFrom !== null) throw new Error('全新库不该触发迁移')
+    fresh.createCollection('迁移测试')
+    const before = fresh.listCollections().length
+    fresh.close()
+
+    // 重开同版本：不迁移
+    const again = await new KnowledgeStore(dir).open()
+    if (again.migratedFrom !== null) throw new Error('同版本不该触发迁移')
+    if (again.listCollections().length !== before) throw new Error('数据丢了')
+    again.close()
+
+    // 把版本调低，模拟旧库升级
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(join(dir, 'kb.sqlite'))
+    raw.prepare('UPDATE meta SET value = ? WHERE key = ?').run('0', 'schema_version')
+    raw.close()
+
+    const upgraded = await new KnowledgeStore(dir).open()
+    if (!upgraded.migratedFrom) throw new Error('旧库未触发迁移')
+    if (!upgraded.migratedFrom.backup) throw new Error('迁移前没有备份')
+    if (upgraded.listCollections().length !== before) throw new Error('迁移后数据丢失')
+    upgraded.close()
+
+    const backups = readdirSync(dir).filter((f) => f.includes('.bak-'))
+    if (backups.length === 0) throw new Error('没有生成备份文件')
+
+    ok('数据库迁移与备份', `旧库升级自动备份 ${backups[0]}，数据完好`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('任务中断与导入上限', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 任务管理四件套
+  for (const name of ['createTask(', 'cancelTask(', 'listTasks(', 'throwIfAborted(']) {
+    if (!host.includes(name)) throw new Error(`缺少 ${name}`)
+  }
+
+  // 上限常量
+  if (!/MAX_INGEST_FILES = 200/.test(host)) throw new Error('缺少 200 文件上限')
+
+  // 抓取必须能接收外部 signal，而不是只有超时
+  if (!/fetchSource\(\{[^}]*signal/.test(host)) {
+    throw new Error('fetchSource 未接收 signal，无法中断')
+  }
+  if (!host.includes('AbortSignal.any')) {
+    // 允许用其他组合方式，但必须同时具备用户取消与超时
+    if (!(host.includes('signal: signal') || host.includes('signal ?? '))) {
+      throw new Error('抓取未把用户 signal 接到 fetch')
+    }
+  }
+
+  // 存储统计与清空
+  if (!/async usage\(\)/.test(host)) throw new Error('缺少 usage()')
+  if (!/async wipe\(/.test(host)) throw new Error('缺少 wipe()')
+  if (!host.includes('删除全部')) throw new Error('清空缺少二次确认短语')
+
+  ok('任务中断与导入上限', '任务可取消 / 200 文件上限 / 存储统计与二次确认齐备')
+})
+
+await test('下载完整性校验', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../lib/models.js', import.meta.url), 'utf8')
+
+  // 必须真的比对哈希，而不是只定义函数
+  if (!src.includes('sha256Of(buffer)')) {
+    throw new Error('下载后没有调用 sha256Of 校验')
+  }
+  if (!/x-linked-etag|etag/.test(src)) {
+    throw new Error('没有读取服务器声明的哈希')
+  }
+  if (!src.includes('哈希不匹配')) {
+    throw new Error('哈希不符时没有拒绝该文件')
+  }
+  // 校验结果要回传，让界面能显示"已验证/仅大小"
+  if (!src.includes('integrity')) throw new Error('未回传完整性状态')
+
+  ok('下载完整性校验', '读取 etag 比对 sha256，不符则换镜像重试')
 })
 
 /* ───────────────── 收尾 ───────────────── */

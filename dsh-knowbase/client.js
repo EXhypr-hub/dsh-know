@@ -525,6 +525,64 @@ window.__ModuleLoader__.load({
   opacity: 0.9;
 }
 
+/* ── 存储与清理 ── */
+.kb-usage {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.kb-usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 11px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.kb-usage-row:last-child { border-bottom: 0; }
+.kb-usage-label { color: var(--dsw-alias-label-secondary); }
+.kb-usage-value {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.kb-usage-total { font-weight: 600; background: var(--dsw-alias-bg-layer-2); }
+.kb-usage-total .kb-usage-label { color: var(--dsw-alias-label-primary); }
+
+.kb-btn-danger {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+.kb-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+}
+.kb-btn-danger:disabled { opacity: 0.45; }
+
+.kb-danger-zone {
+  margin-top: 10px;
+  padding: 11px 13px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 6%, transparent);
+}
+.kb-danger-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-state-error-primary);
+  margin-bottom: 4px;
+}
+.kb-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 6px;
+}
+.kb-check input { accent-color: var(--dsw-alias-brand-primary); }
+
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .kb-fade-in { animation: kb-fade-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
@@ -687,6 +745,24 @@ window.__ModuleLoader__.load({
     'fetch.whitelist': '站点白名单（可留空）',
     'fetch.showSources': '查看权威来源（{n}）',
     'fetch.hideSources': '收起来源清单',
+
+    /* 存储与清理 */
+    'storage.title': '存储与清理',
+    'storage.meta': '看占用了多少，或清空重来',
+    'storage.index': '索引数据库',
+    'storage.files': '原文件副本',
+    'storage.models': '本地模型',
+    'storage.total': '合计',
+    'storage.location': '数据位置',
+    'storage.refresh': '刷新',
+    'storage.wipe': '删除整个知识库',
+    'storage.wipeTitle': '危险操作',
+    'storage.wipeHint': '会删掉全部知识库、文档、切块和向量索引，不可恢复。输入的文本必须完全一致才会执行。',
+    'storage.keepModels': '保留本地模型（下次不用重新下载）',
+    'storage.typeConfirm': '请输入「删除全部」以确认',
+    'storage.wipeConfirm': '确认删除',
+    'storage.wiping': '删除中…',
+    'storage.wiped': '已清空，可以重新建库了',
 
     /* 本地模型 */
     'models.mirror': '下载镜像',
@@ -1446,6 +1522,15 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'kb-section-meta' }, t('fetch.meta')),
                     ),
                     h(FetchPanel, null),
+                  ),
+
+                  /* 存储与清理 */
+                  h('section', { className: 'kb-section' },
+                    h('div', { className: 'kb-section-head' },
+                      h('h2', { className: 'kb-section-title' }, t('storage.title')),
+                      h('span', { className: 'kb-section-meta' }, t('storage.meta')),
+                    ),
+                    h(StoragePanel, { onWiped: () => { refreshCollections() } }),
                   ),
                 ),
           ),
@@ -2714,6 +2799,122 @@ window.__ModuleLoader__.load({
     }
 
     /* ══════════════════════════ 抓取设置结束 ══════════════════════════ */
+
+    /* ══════════════════════════ 存储与清理 ══════════════════════════ */
+
+    function StoragePanel({ onWiped }) {
+      const t = useT()
+      const [usage, setUsage] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [message, setMessage] = useState(null)
+      const [wiping, setWiping] = useState(false)
+      const [confirmText, setConfirmText] = useState('')
+      const [keepModels, setKeepModels] = useState(true)
+
+      const load = useCallback(async () => {
+        try {
+          setUsage(await api('usage'))
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const doWipe = useCallback(async () => {
+        setBusy('wipe')
+        setMessage(null)
+        try {
+          await api('wipe', { confirm: confirmText, keepModels })
+          setWiping(false)
+          setConfirmText('')
+          setMessage({ kind: 'ok', text: t('storage.wiped') })
+          await load()
+          onWiped?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [confirmText, keepModels, load, onWiped, t])
+
+      if (usage === null) return h('div', { className: 'kb-notice' }, t('common.loading'))
+
+      const { bytes, counts } = usage
+      const rows = [
+        [t('storage.index'), bytes.index],
+        [t('storage.files'), bytes.files],
+        [t('storage.models'), bytes.models],
+      ]
+
+      return h('div', null,
+        message
+          ? h('div', { className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''} kb-fade-in` }, message.text)
+          : null,
+
+        h('div', { className: 'kb-usage' },
+          rows.map(([label, value]) => h('div', { key: label, className: 'kb-usage-row' },
+            h('span', { className: 'kb-usage-label' }, label),
+            h('span', { className: 'kb-usage-value' }, formatBytes(value)),
+          )),
+          h('div', { className: 'kb-usage-row kb-usage-total' },
+            h('span', { className: 'kb-usage-label' }, t('storage.total')),
+            h('span', { className: 'kb-usage-value' }, formatBytes(bytes.total)),
+          ),
+        ),
+
+        h('div', { className: 'kb-field-hint', style: { marginTop: 8 } },
+          h('span', null, `${t('storage.location')}：`),
+          h('code', { className: 'kb-code' }, usage.dataRoot),
+        ),
+
+        usage.perDocument
+          ? h('div', { className: 'kb-field-hint' },
+              `按当前 ${counts.documents} 份文档算，平均每份约 ${formatBytes(usage.perDocument)}。`)
+          : null,
+
+        h('div', { style: { marginTop: 12, display: 'flex', gap: 8 } },
+          h('button', { className: 'kb-btn', onClick: load }, t('storage.refresh')),
+          h('button', {
+            className: 'kb-btn kb-btn-danger',
+            onClick: () => { setWiping((v) => !v); setMessage(null) },
+          }, wiping ? t('common.cancel') : t('storage.wipe')),
+        ),
+
+        wiping
+          ? h('div', { className: 'kb-danger-zone kb-fade-in' },
+              h('div', { className: 'kb-danger-title' }, t('storage.wipeTitle')),
+              h('div', { className: 'kb-field-hint', style: { marginBottom: 8 } },
+                t('storage.wipeHint')),
+              h('label', { className: 'kb-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: keepModels,
+                  onChange: (e) => setKeepModels(e.target.checked),
+                }),
+                h('span', null, t('storage.keepModels')),
+              ),
+              h('div', { className: 'kb-field', style: { marginTop: 8 } },
+                h('label', { className: 'kb-field-label' }, t('storage.typeConfirm')),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: '删除全部',
+                  value: confirmText,
+                  onChange: (e) => setConfirmText(e.target.value),
+                }),
+              ),
+              h('button', {
+                className: 'kb-btn kb-btn-danger',
+                style: { marginTop: 8 },
+                disabled: busy !== '' || confirmText !== '删除全部',
+                onClick: doWipe,
+              }, busy === 'wipe' ? t('storage.wiping') : t('storage.wipeConfirm')),
+            )
+          : null,
+      )
+    }
+
+    /* ══════════════════════════ 存储与清理结束 ══════════════════════════ */
 
     /* ══════════════════════════ 注册 ══════════════════════════ */
 

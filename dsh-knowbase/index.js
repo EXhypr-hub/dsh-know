@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, unlink, stat, readdir } from 'node:fs/promises'
+import { readFile, writeFile, unlink, stat, readdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 
@@ -42,6 +42,8 @@ const STAGE = 'P5'
 
 /** 单文件大小上限：50MB */
 const MAX_FILE_BYTES = 50 * 1024 * 1024
+/** 单次批量导入的文件数上限（计划书 5.3-4） */
+const MAX_INGEST_FILES = 200
 
 function defaultDataRoot() {
   const configured = process.env.DSH_KNOWBASE_DIR
@@ -143,6 +145,8 @@ class KnowledgeBase {
     this.ready = false
     this.readyError = null
     this.importing = new Map()
+    /** 可中断的长任务：id → { controller, state, done, total } */
+    this.tasks = new Map()
     this.apiKeyCache = ''
     this.embedderCache = null
     this.rerankerCache = null
@@ -166,21 +170,20 @@ class KnowledgeBase {
    * 批量导入文件或目录（供 kb_ingest 工具使用）。
    * @param {{ paths: string[], collectionId: number, sessionId?: string|null, cwd?: string }} input
    */
-  async ingestPaths({ paths, collectionId, cwd }) {
+  async ingestPaths({ paths, collectionId, cwd, signal, task }) {
     const baseDir = cwd || this.lastCwd || process.cwd()
     const results = []
 
+    // 先展开成文件清单，好在开始前就判断数量是否超限
+    const planned = []
     for (const raw of paths) {
       const target = isAbsolute(raw) ? raw : resolve(baseDir, raw)
       try {
         const info = await stat(target)
         if (info.isDirectory()) {
-          const files = await collectFiles(target)
-          for (const file of files) {
-            results.push(await this.#ingestOne(file, collectionId))
-          }
+          for (const file of await collectFiles(target)) planned.push(file)
         } else if (info.isFile()) {
-          results.push(await this.#ingestOne(target, collectionId))
+          planned.push(target)
         } else {
           results.push({ path: target, ok: false, error: '既不是文件也不是目录' })
         }
@@ -191,6 +194,25 @@ class KnowledgeBase {
           error: error instanceof Error ? error.message : String(error),
         })
       }
+    }
+
+    // 单次任务上限：超过就停下来问，而不是闷头跑到底
+    if (planned.length > MAX_INGEST_FILES) {
+      throw new Error(
+        `一次最多导入 ${MAX_INGEST_FILES} 个文件，这次选了 ${planned.length} 个。`
+        + '请分批导入，或只选中一个较小的目录。',
+      )
+    }
+
+    this.touchTask(task, { total: planned.length })
+
+    let done = 0
+    for (const file of planned) {
+      this.throwIfAborted(signal, '导入')
+      const outcome = await this.#ingestOne(file, collectionId)
+      results.push(outcome)
+      done++
+      this.touchTask(task, { done })
     }
 
     return results
@@ -239,12 +261,14 @@ class KnowledgeBase {
    *   - 体积上限
    *   - 记录来源 URL 与抓取时间
    */
-  async fetchSource({ url, collectionId, title }) {
+  async fetchSource({ url, collectionId, title, signal }) {
     // 1. 总开关：关着就完全不联网
     const policy = this.getFetchConfig()
     if (!policy.enabled) {
       throw new Error('联网抓取未开启。请在「抓取设置」里打开开关，或让用户手动把文件拖进来。')
     }
+
+    this.throwIfAborted(signal, '抓取')
 
     let parsed
     try {
@@ -284,15 +308,23 @@ class KnowledgeBase {
 
     let response
     try {
+      // 用户取消与 30 秒超时任一触发都会中断请求
+      const timeout = AbortSignal.timeout(30000)
+      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
       response = await fetch(parsed.href, {
         redirect: 'follow',
-        signal: AbortSignal.timeout(30000),
+        signal: combined,
         headers: {
-          'user-agent': 'dsh-knowbase/0.3 (+local knowledge base)',
+          'user-agent': 'dsh-knowbase/0.4 (+local knowledge base)',
           accept: 'text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5',
         },
       })
     } catch (error) {
+      if (signal?.aborted) {
+        const aborted = new Error('抓取已取消')
+        aborted.code = 'ABORTED'
+        throw aborted
+      }
       throw new Error(`抓取失败：${error instanceof Error ? error.message : String(error)}`)
     }
 
@@ -764,6 +796,172 @@ class KnowledgeBase {
     const reranker = await this.reranker()
     if (!reranker) throw new Error('尚未配置重排方式')
     return reranker.test()
+  }
+
+  /* ────────────────────── 长任务 ────────────────────── */
+
+  /**
+   * 建一个可中断的任务。
+   * 抓取和批量导入都走这里，这样界面能显示进度、也能一键取消。
+   */
+  createTask(label, total = 0) {
+    const id = randomUUID()
+    const task = {
+      id,
+      label,
+      controller: new AbortController(),
+      state: 'running',
+      startedAt: Date.now(),
+      settledAt: null,
+      done: 0,
+      total,
+      error: null,
+    }
+    this.tasks.set(id, task)
+    // 只保留最近 30 条，避免长期运行后无限增长
+    if (this.tasks.size > 30) {
+      const oldest = [...this.tasks.values()]
+        .filter((t) => t.state !== 'running')
+        .sort((a, b) => a.startedAt - b.startedAt)[0]
+      if (oldest) this.tasks.delete(oldest.id)
+    }
+    return task
+  }
+
+  /** 更新任务进度 */
+  touchTask(task, patch) {
+    if (!task) return
+    Object.assign(task, patch)
+  }
+
+  /** 结束任务 */
+  settleTask(task, state, error = null) {
+    if (!task) return
+    task.state = state
+    task.settledAt = Date.now()
+    task.error = error ? String(error) : null
+  }
+
+  /** 取消一个任务 */
+  cancelTask(id) {
+    const task = this.tasks.get(id)
+    if (!task) throw new Error(`找不到任务「${id}」`)
+    if (task.state !== 'running') {
+      return { id, state: task.state, note: '任务已结束，无需取消' }
+    }
+    task.controller.abort()
+    task.state = 'cancelled'
+    task.settledAt = Date.now()
+    return { id, state: 'cancelled' }
+  }
+
+  /** 列出任务（去掉不可序列化的 controller） */
+  listTasks() {
+    return [...this.tasks.values()]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .map(({ controller, ...rest }) => rest)
+  }
+
+  /** 若已取消则抛出 */
+  throwIfAborted(signal, what) {
+    if (signal?.aborted) {
+      const error = new Error(`${what}已取消`)
+      error.code = 'ABORTED'
+      throw error
+    }
+  }
+
+  /* ────────────────────── 存储统计 ────────────────────── */
+
+  /**
+   * 统计磁盘占用。
+   * 分别算索引、原文件副本、本地模型三块，界面用它判断空间够不够。
+   */
+  async usage() {
+    const dirSize = async (dir) => {
+      let total = 0
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch {
+        return 0
+      }
+      for (const entry of entries) {
+        const full = join(dir, entry.name)
+        try {
+          if (entry.isDirectory()) total += await dirSize(full)
+          else if (entry.isFile()) total += (await stat(full)).size
+        } catch {
+          // 单个文件读不到就跳过，不因为一个坏文件让统计失败
+        }
+      }
+      return total
+    }
+
+    const [files, models] = await Promise.all([
+      dirSize(this.store.filesDir),
+      dirSize(join(this.dataRoot, 'models')),
+    ])
+
+    let index = 0
+    for (const name of ['kb.sqlite', 'kb.sqlite-wal', 'kb.sqlite-shm']) {
+      try {
+        index += (await stat(join(this.dataRoot, name))).size
+      } catch {
+        // 文件不存在就跳过
+      }
+    }
+
+    const counts = this.store.counts()
+    return {
+      dataRoot: this.dataRoot,
+      bytes: { index, files, models, total: index + files + models },
+      // 每份文档的平均占用，帮助用户估算还能放多少
+      perDocument: counts.documents > 0
+        ? Math.round((index + files) / counts.documents)
+        : null,
+      counts,
+    }
+  }
+
+  /* ────────────────────── 全局清理 ────────────────────── */
+
+  /** 删除整个知识库（索引 + 文件副本），可选是否连本地模型一起删 */
+  async wipe({ keepModels = true, confirm = '' } = {}) {
+    // 二次确认：必须原样输入指定短语，防止误触
+    if (confirm !== '删除全部') {
+      throw new Error('需要二次确认：请原样输入「删除全部」')
+    }
+    this.store.close()
+
+    for (const name of ['kb.sqlite', 'kb.sqlite-wal', 'kb.sqlite-shm']) {
+      try {
+        await unlink(join(this.dataRoot, name))
+      } catch {
+        // 不存在就跳过
+      }
+    }
+
+    try {
+      await rm(this.store.filesDir, { recursive: true, force: true })
+    } catch {
+      // 目录可能已不存在
+    }
+
+    if (!keepModels) {
+      try {
+        await rm(join(this.dataRoot, 'models'), { recursive: true, force: true })
+      } catch {
+        // 同上
+      }
+    }
+
+    // 重新建一个空库，让插件继续可用
+    this.store = new KnowledgeStore(this.dataRoot)
+    await this.store.open()
+    this.store.ensureDefaultCollection()
+
+    return { ok: true, keptModels: keepModels }
   }
 
   /** 读取抓取配置 */
@@ -1315,6 +1513,26 @@ export function apply(ctx, config) {
           elapsedMs: Date.now() - state.startedAt,
         },
       })
+    })
+
+    /* ── 长任务、存储统计、全局清理 ── */
+    route('/api/dsh-knowbase/task', (body) => {
+      if (body.action === 'list') return json({ ok: true, value: kb.listTasks() })
+      if (body.action === 'cancel') {
+        return json({ ok: true, value: kb.cancelTask(String(body.id ?? '')) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    route('/api/dsh-knowbase/usage', async () =>
+      json({ ok: true, value: await kb.usage() }))
+
+    route('/api/dsh-knowbase/wipe', async (body) => {
+      const result = await kb.wipe({
+        keepModels: body.keepModels !== false,
+        confirm: String(body.confirm ?? ''),
+      })
+      return json({ ok: true, value: result })
     })
 
     /* ── 抓取设置与权威来源清单 ── */
