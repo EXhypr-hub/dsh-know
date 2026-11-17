@@ -3176,7 +3176,16 @@ window.__ModuleLoader__.load({
         setBench('run')
         setBenchResult(null)
         try {
-          const result = await api('bench-device')
+          /*
+           * 把界面上当前的配置一起传过去。
+           * 用户往往是刚把嵌入方式改成「本地模型」就直接点测速，
+           * 这时改动还没保存；只靠后端读已保存配置会误报
+           * 「需要先把嵌入方式设为本地模型」。
+           */
+          const result = await api('bench-device', {
+            provider: config.provider,
+            local: config.local,
+          })
           const cpu = result.results.find((r) => r.device === 'cpu' && r.ok)
           const dml = result.results.find((r) => r.device === 'dml' && r.ok)
           const parts = []
@@ -3188,7 +3197,8 @@ window.__ModuleLoader__.load({
         } finally {
           setBench('')
         }
-      }, [])
+        // 依赖 config：否则闭包会读到旧的 provider/local，测速又变回读已保存配置
+      }, [config])
       const [catalog, setCatalog] = useState([])
       const [installed, setInstalled] = useState([])
       const [mirrors, setMirrors] = useState([])

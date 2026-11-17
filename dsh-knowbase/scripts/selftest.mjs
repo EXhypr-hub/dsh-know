@@ -1065,7 +1065,8 @@ await test('设备测速接口', async () => {
   const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 
   // 后端要有测速方法，且两种设备都测
-  if (!/async benchDevice\(\)/.test(host)) throw new Error('缺少 benchDevice()')
+  // （签名现在带 override 参数，具体校验见「测速使用界面当前配置」那条）
+  if (!/async benchDevice\(/.test(host)) throw new Error('缺少 benchDevice()')
   if (!host.includes("for (const device of ['cpu', 'dml'])")) {
     throw new Error('测速没有覆盖 cpu 和 dml 两种设备')
   }
@@ -1620,6 +1621,52 @@ await test('版本适配：engines 覆盖所有预发布版', async () => {
   }
 
   ok('版本适配：engines 覆盖所有预发布版', `覆盖 ${mustMatch.length} 个版本，含当前 0.2.2-rc.3`)
+})
+
+await test('测速使用界面当前配置，不依赖已保存', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  /*
+   * 曾经的 bug：界面上一改「嵌入方式」为本地模型，LocalModelPicker 立刻渲染，
+   * 但改动还没保存。测速请求不带配置，后端只能读已保存值，
+   * 于是出现「明明选的是本地模型，却提示需要先把嵌入方式设为本地模型」。
+   */
+
+  // 后端：benchDevice 要接受 override
+  if (!/async benchDevice\(override = \{\}\)/.test(host)) {
+    throw new Error('benchDevice 没有接受 override 参数')
+  }
+  if (!/override\.provider \?\? saved\.provider/.test(host)) {
+    throw new Error('没有优先使用调用方传来的 provider')
+  }
+  // 路由要把 body 透传
+  if (!/benchDevice\(\{\s*provider: body\?\.provider/.test(host)) {
+    throw new Error('bench-device 路由没有透传界面配置')
+  }
+
+  // 前端：要把当前 config 传过去
+  if (!/api\('bench-device', \{\s*provider: config\.provider/.test(client)) {
+    throw new Error('前端测速没有传当前配置')
+  }
+  // 依赖数组必须含 config，否则闭包读到旧值，等于没修
+  if (!/\}, \[config\]\)/.test(client)) {
+    throw new Error('runBench 的依赖数组没含 config，会读到旧的 provider')
+  }
+
+  // 行为验证：合并逻辑
+  const merge = (saved, override) => ({
+    provider: override.provider ?? saved.provider,
+    local: { ...saved.local, ...(override.local ?? {}) },
+  })
+  const savedNone = { provider: 'none', local: { modelId: 'm', dtype: 'q8', device: 'cpu' } }
+  const unsaved = merge(savedNone, { provider: 'local', local: { device: 'dml' } })
+  if (unsaved.provider !== 'local') throw new Error('未保存的 local 没有被采信')
+  if (unsaved.local.device !== 'dml') throw new Error('未保存的 device 没有被采信')
+  if (unsaved.local.modelId !== 'm') throw new Error('其它字段应保留')
+
+  ok('测速使用界面当前配置，不依赖已保存', 'override 优先，未传时回落，依赖数组已含 config')
 })
 
 /* ───────────────── 收尾 ───────────────── */

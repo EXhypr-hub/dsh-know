@@ -1002,9 +1002,23 @@ this.store.deleteDocument(id)
    * 本机实测 DML 慢 3 倍多，但换台机器、换模型可能不同。
    * 用户点一下就知道自己这台值不值得开 GPU。
    */
-  async benchDevice() {
-    const config = this.getEmbedConfig()
-    if (config.provider !== 'local') {
+  /**
+   * 测 CPU 与 GPU 哪个快。
+   *
+   * @param {object} [override] 界面上当前选中的配置（可能尚未保存）。
+   *
+   * 为什么要这个参数：界面上一改「嵌入方式」为本地模型，测速按钮立刻可见，
+   * 但此时改动还没保存。如果只读已保存配置，就会出现
+   * 「明明选的是本地模型，却提示需要先把嵌入方式设为本地模型」。
+   * 所以优先用调用方传来的配置，没传才回落到已保存的。
+   */
+  async benchDevice(override = {}) {
+    const saved = this.getEmbedConfig()
+    const provider = override.provider ?? saved.provider
+    const local = { ...saved.local, ...(override.local ?? {}) }
+    const config = { ...saved, provider, local }
+
+    if (provider !== 'local') {
       throw new Error('需要先把嵌入方式设为「本地模型」，才能测本地推理速度')
     }
 
@@ -2401,8 +2415,15 @@ export function apply(ctx, config) {
     })
 
     /* ── 导出与数据目录 ── */
-    route('/api/dsh-knowbase/bench-device', async () =>
-      json({ ok: true, value: await kb.benchDevice() }))
+    route('/api/dsh-knowbase/bench-device', async (body) =>
+      json({
+        ok: true,
+        // 带上界面当前的配置，测速就不依赖「是否已保存」
+        value: await kb.benchDevice({
+          provider: body?.provider,
+          local: body?.local,
+        }),
+      }))
 
     route('/api/dsh-knowbase/export', async (body) =>
       json({
