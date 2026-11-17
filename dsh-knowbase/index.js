@@ -395,20 +395,34 @@ class KnowledgeBase {
     const embedder = this.embedder()
     if (!embedder) throw new Error('尚未配置嵌入模型，请先在设置里接入')
 
-    const modelId = embedder.id
-    let done = 0
-    const total = this.store.countEmbeddings(modelId, collectionId) === 0
-      ? this.store.countChunks(collectionId)
-      : this.store.countChunks(collectionId)
+    /*
+     * 关键：先把维度确定下来，再开始写向量。
+     * modelId 里包含维度，若中途才得知真实维度，前半段写进去的向量
+     * 就会挂在另一个 modelId 下，表现为「刚建完索引却检索不到」。
+     */
+    if (embedder.dimensionResolved === 0) {
+      const probe = await embedder.test()
+      if (!probe.dimension) throw new Error('无法确定向量维度，请先点「测试连接」确认服务正常')
+      embedder.dimension = probe.dimension
+      embedder.dimensionResolved = probe.dimension
+    }
+    this.setEmbedConfig({ api: { dimension: embedder.dimensionResolved } })
 
-    // 逐批处理，避免一次拉太多
+    // 配置刚被改写，缓存已清空，重新取一个 id 稳定的实例
+    const stable = this.embedder()
+    if (!stable) throw new Error('嵌入配置保存失败')
+
+    const modelId = stable.id
+    let done = 0
+    const total = this.store.countChunks(collectionId)
+
     for (;;) {
       if (signal?.aborted) throw new Error('已取消')
       const pending = this.store.chunksNeedingEmbedding(modelId, collectionId, 64)
       if (pending.length === 0) break
 
       const texts = pending.map((row) => row.text)
-      const vectors = await embedder.embed(texts)
+      const vectors = await stable.embed(texts)
 
       const rows = []
       for (let i = 0; i < pending.length; i++) {
@@ -426,7 +440,12 @@ class KnowledgeBase {
       onProgress?.(done, total)
     }
 
-    return { modelId, embedded: this.store.countEmbeddings(modelId, collectionId), total }
+    return {
+      modelId,
+      embedded: this.store.countEmbeddings(modelId, collectionId),
+      total,
+      dimension: stable.dimensionResolved,
+    }
   }
 
   /* ────────────────────── 混合检索 ────────────────────── */

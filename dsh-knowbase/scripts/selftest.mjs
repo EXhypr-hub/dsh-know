@@ -362,9 +362,97 @@ await test('API 嵌入错误处理', async () => {
   ok('API 嵌入错误处理', '空配置与不可达地址均有明确报错')
 })
 
+await test('维度一致性与语义检索（假服务端）', async () => {
+  const { createServer } = await import('node:http')
+  const { KnowledgeStore } = await import('../lib/store.js')
+  const { ApiEmbedder, cosine, fromBlob, normalize, toBlob } = await import('../lib/embed.js')
+
+  // 用关键词映射成向量的小型假服务，无需联网
+  const DIM = 8
+  const KEYMAP = { 光合: 0, 光能: 0, 植物: 0, 马克思: 3, 商品: 3, 异化: 3, 电路: 6, 十进制: 6 }
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (c) => { body += c })
+    req.on('end', () => {
+      const { input, model } = JSON.parse(body)
+      const data = input.map((text, index) => {
+        const v = new Array(DIM).fill(0)
+        for (const [kw, idx] of Object.entries(KEYMAP)) {
+          if (text.includes(kw)) { v[idx] += 1; v[(idx + 1) % DIM] += 0.3 }
+        }
+        if (v.every((x) => x === 0)) v[7] = 1
+        return { index, embedding: v, object: 'embedding' }
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ object: 'list', model, data }))
+    })
+  })
+
+  try {
+    await new Promise((r) => server.listen(0, '127.0.0.1', r))
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`
+
+    const dir = await mkdtemp(join(tmpdir(), 'kb-dim-'))
+    const store = new KnowledgeStore(dir)
+    await store.open()
+    const col = store.ensureDefaultCollection()
+    const docId = store.createDocument({
+      collectionId: col.id, title: 'x', filename: 'x.md', ext: 'md', size: 1, sha256: 'dim1',
+    })
+    store.replaceChunks(docId, [
+      '光合作用把光能转化',
+      '马克思讨论异化',
+      '数字电路十进制',
+    ].map((t, i) => ({ ord: i, text: t, tokens: 5 })))
+
+    const cfg = { baseUrl, model: 'test-embed', dimension: 0, batchSize: 2 }
+
+    // 模拟修复后的流程：先探测维度，再写向量
+    const probe = new ApiEmbedder(cfg)
+    const tested = await probe.test()
+    cfg.dimension = tested.dimension
+
+    const stable = new ApiEmbedder(cfg)
+    // modelId 必须只由配置决定，不依赖运行时探测
+    if (probe.id !== stable.id) throw new Error('modelId 前后不一致')
+
+    for (;;) {
+      const pending = store.chunksNeedingEmbedding(stable.id, col.id, 64)
+      if (pending.length === 0) break
+      const vectors = await stable.embed(pending.map((p) => p.text))
+      store.saveEmbeddings(stable.id, pending.map((p, i) => ({
+        chunkId: p.chunk_id,
+        dimension: vectors[i].length,
+        vec: toBlob(normalize(Float32Array.from(vectors[i]))),
+        textHash: 'h',
+      })))
+    }
+
+    // 模拟重启：重新构造实例
+    const fresh = new ApiEmbedder(cfg)
+    if (fresh.id !== stable.id) throw new Error('重启后 modelId 变化')
+    const rows = store.listVectors(col.id, fresh.id)
+    if (rows.length !== 3) throw new Error(`重启后索引丢失，只剩 ${rows.length} 条`)
+
+    // 语义命中：问「光能转化」应命中光合那句，而非电路那句
+    const [qv] = await fresh.embed(['光能转化'])
+    const qn = normalize(Float32Array.from(qv))
+    const ranked = rows
+      .map((r) => ({ text: r.text, sim: cosine(qn, fromBlob(r.vec)) }))
+      .sort((a, b) => b.sim - a.sim)
+    if (!ranked[0].text.includes('光合')) throw new Error('语义检索未命中正确文档')
+
+    store.close()
+    ok('维度一致性与语义检索', `重启后索引完好，命中「${ranked[0].text}」`)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══\n`)
-process.exit(fail > 0 ? 1 : 0)
+// 不直接 process.exit：让事件循环自然排空，避免 HTTP server 句柄未关闭时的 libuv 断言
+if (fail > 0) process.exitCode = 1

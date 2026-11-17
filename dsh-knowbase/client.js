@@ -1123,66 +1123,110 @@ window.__ModuleLoader__.load({
      * 用户只需贴 Key；想用别家就选「自定义」自己填。
      */
     const EMBED_PROVIDERS = [
-      { id: 'custom', label: '自定义…', baseUrl: '', model: '', hint: '' },
+      {
+        id: 'custom',
+        label: '自定义…',
+        baseUrl: '',
+        hint: '自己填任意 OpenAI 兼容地址与模型名。',
+        models: [],
+      },
       {
         id: 'siliconflow',
         label: '硅基流动 SiliconFlow',
         baseUrl: 'https://api.siliconflow.cn/v1',
-        model: 'BAAI/bge-m3',
-        hint: '国内直连快，注册送额度。bge-m3 支持中英文，1024 维。',
         keyUrl: 'https://cloud.siliconflow.cn/account/ak',
-      },
-      {
-        id: 'deepseek',
-        label: 'DeepSeek',
-        baseUrl: 'https://api.deepseek.com/v1',
-        model: 'deepseek-embedding',
-        hint: '注意：DeepSeek 目前未公开嵌入接口，此项仅供参考，如无对应模型请改用别家。',
+        hint: '国内直连快，注册送额度。',
+        models: [
+          { id: 'BAAI/bge-m3', dim: 1024, note: '多语言，8K 上下文，综合最稳（推荐）' },
+          { id: 'Pro/BAAI/bge-m3', dim: 1024, note: 'bge-m3 增强版' },
+          { id: 'Qwen/Qwen3-Embedding-8B', dim: 4096, note: 'MTEB 多语言第一，效果最好，价格较高' },
+          { id: 'Qwen/Qwen3-Embedding-4B', dim: 2560, note: '效果与成本折中' },
+          { id: 'Qwen/Qwen3-Embedding-0.6B', dim: 1024, note: '轻量，快且便宜' },
+          { id: 'BAAI/bge-large-zh-v1.5', dim: 1024, note: '纯中文优化，512 上下文' },
+          { id: 'BAAI/bge-large-en-v1.5', dim: 1024, note: '纯英文优化，512 上下文' },
+          { id: 'netease-youdao/bce-embedding-base_v1', dim: 768, note: '网易有道，中文短文本，512 上下文' },
+        ],
       },
       {
         id: 'openai',
         label: 'OpenAI',
         baseUrl: 'https://api.openai.com/v1',
-        model: 'text-embedding-3-small',
-        hint: '国内可能需要代理。3-small 1536 维，便宜。',
         keyUrl: 'https://platform.openai.com/api-keys',
+        hint: '国内可能需要代理。',
+        models: [
+          { id: 'text-embedding-3-small', dim: 1536, note: '便宜，够用（推荐）' },
+          { id: 'text-embedding-3-large', dim: 3072, note: '效果更好，价格更高' },
+          { id: 'text-embedding-ada-002', dim: 1536, note: '旧版，仅兼容用' },
+        ],
       },
       {
         id: 'dashscope',
-        label: '阿里云百炼',
+        label: '阿里云百炼 DashScope',
         baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        model: 'text-embedding-v3',
-        hint: '通义千问系列，国内稳定。',
         keyUrl: 'https://bailian.console.aliyun.com/',
+        hint: '通义千问系列，国内稳定。',
+        models: [
+          { id: 'text-embedding-v3', dim: 1024, note: '通义 v3，中英文（推荐）' },
+          { id: 'text-embedding-v2', dim: 1536, note: '上一代' },
+          { id: 'text-embedding-v1', dim: 1536, note: '旧版，仅兼容用' },
+        ],
       },
       {
         id: 'zhipu',
-        label: '智谱 AI',
+        label: '智谱 AI BigModel',
         baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-        model: 'embedding-3',
-        hint: '国内可用。',
         keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
+        hint: '国内可用，有免费额度。',
+        models: [
+          { id: 'embedding-3', dim: 2048, note: '最新，中英文（推荐）' },
+          { id: 'embedding-2', dim: 1024, note: '上一代' },
+        ],
+      },
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        hint: '注意：DeepSeek 目前未公开嵌入接口。此项保留占位，实际请改用其他服务商。',
+        models: [],
       },
       {
         id: 'ollama',
         label: '本地 Ollama',
         baseUrl: 'http://127.0.0.1:11434/v1',
-        model: 'bge-m3',
-        hint: '完全本地，需先装 Ollama 并 pull 模型：ollama pull bge-m3。无需 Key。',
+        hint: '完全本地，无需 Key。先执行 ollama pull <模型名>。',
+        models: [
+          { id: 'bge-m3', dim: 1024, note: '多语言，8K 上下文（推荐）' },
+          { id: 'qwen3-embedding', dim: 1024, note: '通义 Qwen3 嵌入系列' },
+          { id: 'nomic-embed-text', dim: 768, note: '英文强，轻量' },
+          { id: 'nomic-embed-text-v2-moe', dim: 768, note: 'nomic v2 MoE' },
+          { id: 'mxbai-embed-large', dim: 1024, note: '英文强' },
+          { id: 'snowflake-arctic-embed', dim: 1024, note: '英文' },
+          { id: 'snowflake-arctic-embed2', dim: 1024, note: '英文 v2' },
+          { id: 'all-minilm', dim: 384, note: '极小极快，精度一般' },
+          { id: 'embeddinggemma', dim: 768, note: 'Google Gemma 嵌入' },
+          { id: 'granite-embedding', dim: 384, note: 'IBM，轻量' },
+          { id: 'bge-large', dim: 1024, note: 'BGE 大模型' },
+        ],
       },
       {
         id: 'lmstudio',
         label: '本地 LM Studio',
         baseUrl: 'http://127.0.0.1:1234/v1',
-        model: 'text-embedding-nomic-embed-text-v1.5',
-        hint: '完全本地，LM Studio 里加载嵌入模型后启动服务端。无需 Key。',
+        hint: '完全本地，无需 Key。在 LM Studio 中加载嵌入模型后启动本地服务端。',
+        models: [
+          { id: 'text-embedding-nomic-embed-text-v1.5', dim: 768, note: 'LM Studio 常见默认模型' },
+          { id: 'text-embedding-bge-m3', dim: 1024, note: '如已下载 bge-m3' },
+        ],
       },
       {
         id: 'xinference',
         label: '本机 Xinference',
         baseUrl: 'http://127.0.0.1:9997/v1',
-        model: 'bge-m3',
-        hint: '本地部署推理框架，需自行启动。无需 Key。',
+        hint: '完全本地，无需 Key。需先启动 Xinference 并加载嵌入模型。',
+        models: [
+          { id: 'bge-m3', dim: 1024, note: '多语言（推荐）' },
+          { id: 'bge-large-zh-v1.5', dim: 1024, note: '中文' },
+        ],
       },
     ]
 
@@ -1237,14 +1281,20 @@ window.__ModuleLoader__.load({
         setConfig((cur) => (cur === null ? cur : { ...cur, provider: id }))
       }, [])
 
-      /** 选择服务商预设：一键填好地址与模型 */
+      /** 选择服务商预设：一键填好地址，并默认选中第一个模型 */
       const chooseProvider = useCallback((id) => {
         setProviderId(id)
         const preset = EMBED_PROVIDERS.find((p) => p.id === id)
         if (!preset || id === 'custom') return
+        const first = preset.models?.[0]
         setConfig((cur) => (cur === null ? cur : {
           ...cur,
-          api: { ...cur.api, baseUrl: preset.baseUrl, model: preset.model },
+          api: {
+            ...cur.api,
+            baseUrl: preset.baseUrl,
+            model: first?.id ?? '',
+            dimension: first?.dim ?? 0,
+          },
         }))
       }, [])
 
@@ -1393,16 +1443,53 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'kb-field-hint' }, '填到 /v1 为止，插件会拼上 /embeddings'),
               ),
 
+              /* 模型：有预设列表就下拉选，否则手填；两种情况都可手动改 */
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '模型名'),
+                h('label', { className: 'kb-field-label' },
+                  '模型',
+                  currentPreset?.models?.length
+                    ? h('span', { className: 'kb-mode-chip', style: { marginLeft: 8 } },
+                        `${currentPreset.models.length} 个可选`)
+                    : null,
+                ),
+
+                currentPreset?.models?.length
+                  ? h('select', {
+                      className: 'kb-select',
+                      value: currentPreset.models.some((m) => m.id === config.api.model)
+                        ? config.api.model
+                        : '__custom__',
+                      onChange: (e) => {
+                        const value = e.target.value
+                        if (value === '__custom__') return
+                        const picked = currentPreset.models.find((m) => m.id === value)
+                        patchApi({ model: value, dimension: picked?.dim ?? 0 })
+                      },
+                    },
+                      currentPreset.models.map((m) =>
+                        h('option', { key: m.id, value: m.id },
+                          `${m.id}${m.dim ? `（${m.dim} 维）` : ''}${m.note ? ` · ${m.note}` : ''}`,
+                        ),
+                      ),
+                      h('option', { value: '__custom__' }, '自定义模型名…'),
+                    )
+                  : null,
+
                 h('input', {
                   className: 'kb-input',
-                  placeholder: '例如 BAAI/bge-m3',
+                  placeholder: currentPreset?.models?.length ? '也可以直接输入模型标识' : '例如 BAAI/bge-m3',
                   value: config.api.model,
-                  onChange: (e) => patchApi({ model: e.target.value }),
+                  onChange: (e) => {
+                    // 手动输入即视为自定义，清掉预设维度由服务返回决定
+                    patchApi({ model: e.target.value, dimension: 0 })
+                  },
+                  style: currentPreset?.models?.length ? { marginTop: 6 } : undefined,
                 }),
+
                 h('div', { className: 'kb-field-hint' },
-                  '写服务商文档里的模型标识，大小写与斜杠要一致。'),
+                  currentPreset?.models?.length
+                    ? '从上面选一个，或直接在输入框写服务商文档里的模型标识（大小写与斜杠要一致）。'
+                    : '写服务商文档里的模型标识，大小写与斜杠要一致。'),
               ),
 
               h('div', { className: 'kb-field' },

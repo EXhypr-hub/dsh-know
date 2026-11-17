@@ -126,6 +126,10 @@ export class ApiEmbedder {
     for (let i = 0; i < texts.length; i += this.batchSize) {
       const slice = texts.slice(i, i + this.batchSize)
       const vectors = await this.embedBatch(slice)
+      // 首次得到真实维度时同步到实例，保证本批次内 id 稳定
+      if (this.dimensionResolved === 0 && vectors.length > 0) {
+        this.dimensionResolved = vectors[0].length
+      }
       out.push(...vectors)
       onProgress?.(Math.min(i + slice.length, texts.length), texts.length)
     }
