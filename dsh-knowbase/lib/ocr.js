@@ -13,7 +13,18 @@
  * 代价必须说清楚：开启后扫描页的**图片**会发往所配置的 API。
  */
 
-import { createCanvas } from '@napi-rs/canvas'
+/**
+ * 这里不顶层 import @napi-rs/canvas：它带 38MB 原生二进制，
+ * 而大多数用户只用 API 嵌入、根本不开 OCR。
+ * 改成用到时才加载，插件启动就快很多。
+ */
+let canvasModule
+async function loadCanvas() {
+  if (!canvasModule) {
+    canvasModule = await import('@napi-rs/canvas')
+  }
+  return canvasModule.createCanvas
+}
 
 /** 单页渲染的最大边长，防止超大页把内存吃光 */
 const MAX_EDGE = 2048
@@ -73,6 +84,8 @@ export async function renderPdfPages(buffer, options = {}) {
   }
 
   // pdfjs 在 Node 里对全局 DOMMatrix 有依赖，@napi-rs/canvas 提供了它
+  const createCanvas = await loadCanvas()
+
   const doc = await pdfjs.getDocument({
     data: new Uint8Array(buffer),
     useSystemFonts: true,
@@ -224,6 +237,7 @@ export class VisionOcr {
 
   /** 连通性测试：渲染一张小图跑一遍，确认真能识别 */
   async test() {
+    const createCanvas = await loadCanvas()
     const started = Date.now()
     const canvas = createCanvas(320, 90)
     const ctx = canvas.getContext('2d')

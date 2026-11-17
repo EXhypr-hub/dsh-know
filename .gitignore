@@ -44,3 +44,6 @@ coverage/
 dsh-knowbase/node_modules/
 
 
+
+# 编辑过程中的临时备份
+*.bak-*

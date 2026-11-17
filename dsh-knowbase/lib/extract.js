@@ -14,6 +14,21 @@ import { inflateRawSync } from 'node:zlib'
  * 解析 ZIP 中央目录，返回可读取条目内容的句柄。
  * 只支持 stored / deflate 两种压缩方式，这正是 OOXML 使用的全部方式。
  */
+/** 单条目解压上限：64MB（正常 Office 文档的单个 XML 远小于此） */
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024
+/** 整个压缩包累计解压上限：256MB */
+const MAX_TOTAL_BYTES = 256 * 1024 * 1024
+
+function tooBig(name, bytes) {
+  const size = bytes === null
+    ? `超过 ${Math.round(MAX_ENTRY_BYTES / 1024 / 1024)}MB`
+    : `${Math.round(bytes / 1024 / 1024)}MB`
+  return new Error(
+    `压缩包里的「${name}」解压后体积异常（${size}），已中止。`
+    + '这可能是压缩炸弹，也可能是文档本身损坏。',
+  )
+}
+
 export function openZip(buffer) {
   // End of Central Directory 签名 0x06054b50，从尾部向前找（注释最长 65535）
   let eocd = -1
@@ -29,6 +44,8 @@ export function openZip(buffer) {
   const count = buffer.readUInt16LE(eocd + 10)
   let p = buffer.readUInt32LE(eocd + 16)
   const entries = new Map()
+  /** 已解压字节累计，用于拦截「多条目累计爆炸」 */
+  let totalInflated = 0
 
   for (let n = 0; n < count; n++) {
     if (buffer.readUInt32LE(p) !== 0x02014b50) throw new Error('ZIP 中央目录损坏')
@@ -49,15 +66,65 @@ export function openZip(buffer) {
     read(name) {
       const entry = entries.get(name)
       if (!entry) return null
+
+      /*
+       * 安全：ZIP 炸弹防护。
+       *
+       * 恶意 docx/xlsx 可以只声明几十 KB，解压出几 GB 把进程撑爆。
+       * 两道闸：
+       *   1. 单条目解压上限（inflateRawSync 的 maxOutputLength）
+       *   2. 整个压缩包累计解压上限（xlsx 可以有上千个条目）
+       * 超过就抛出明确错误，而不是让进程被 OOM 杀掉。
+       */
       const lh = entry.localOffset
+      if (lh + 30 > buffer.length) throw new Error('ZIP 本地文件头越界')
       if (buffer.readUInt32LE(lh) !== 0x04034b50) throw new Error('ZIP 本地文件头损坏')
+
       const nameLen = buffer.readUInt16LE(lh + 26)
       const extraLen = buffer.readUInt16LE(lh + 28)
       const dataStart = lh + 30 + nameLen + extraLen
+
+      // 声明的大小必须是个合法值，且不能越过整个 buffer
+      if (entry.compressedSize < 0 || dataStart + entry.compressedSize > buffer.length) {
+        throw new Error(`ZIP 条目「${name}」声明的压缩大小非法或越界`)
+      }
+
       const raw = buffer.subarray(dataStart, dataStart + entry.compressedSize)
-      if (entry.method === 0) return raw
-      if (entry.method === 8) return inflateRawSync(raw)
-      throw new Error(`不支持的 ZIP 压缩方式: ${entry.method}`)
+
+      let out
+      if (entry.method === 0) {
+        // 未压缩：直接按声明大小检查
+        if (raw.length > MAX_ENTRY_BYTES) throw tooBig(name, raw.length)
+        out = raw
+      } else if (entry.method === 8) {
+        try {
+          out = inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_BYTES })
+        } catch (error) {
+          /*
+           * Node 在超过 maxOutputLength 时的报错文案随版本不同：
+           * 「Cannot create a Buffer larger than N bytes」「buffer too large」
+           * 「out of range」等，统一识别成体积超限。
+           */
+          const message = String(error?.message ?? '')
+          if (/maxOutputLength|buffer\s+(too\s+large|larger)|out of range/i.test(message)) {
+            throw tooBig(name, null)
+          }
+          throw error
+        }
+      } else {
+        throw new Error(`不支持的 ZIP 压缩方式: ${entry.method}`)
+      }
+
+      // 累计闸：防止很多小条目合起来把内存吃光
+      totalInflated += out.length
+      if (totalInflated > MAX_TOTAL_BYTES) {
+        throw new Error(
+          `这个压缩包解压后总量超过 ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)}MB，已中止。`
+          + '如果是正常文档，请拆分后再导入。',
+        )
+      }
+
+      return out
     },
     readText(name) {
       const buf = this.read(name)
@@ -290,8 +357,15 @@ export function extractText(buffer) {
   return { sections: [{ text }], meta: {} }
 }
 
+/** 网页正文抽取的输入上限：8MB（再大也没必要，且正则处理会变慢） */
+const MAX_HTML_BYTES = 8 * 1024 * 1024
+
 export function extractHtml(buffer) {
-  const html = buffer.toString('utf8')
+  // 安全：限制输入长度。恶意构造的超大 HTML 会让正则退化，拖慢甚至卡住进程。
+  const source = buffer.length > MAX_HTML_BYTES
+    ? buffer.subarray(0, MAX_HTML_BYTES)
+    : buffer
+  const html = source.toString('utf8')
   const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html
   const cleaned = body
     .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, '')

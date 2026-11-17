@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Local knowledge base",
-    "description": "Build a knowledge base from your own documents. Drop in PDF, Word, PowerPoint and Excel files, or let the agent collect material from authoritative sources. Answers come back with the passage, the document name and the page number, and every file stays on this computer.",
+    "description": "Turns PDF, Word, PowerPoint and Excel files into a locally searchable knowledge base, and lets the agent consult your own documents before answering with document names and page numbers. Open it from the knowledge base icon in the left sidebar: create a collection, use \"Add source\" to import files, write a note, pick a folder or fetch a link, choose an embedding model in settings, then build the index. The two buttons at the top right are the recall test and settings. Data stays on this machine by default and search never goes online. Limits: with an API embedding or rerank provider, the text chunks are sent to that service; with OCR enabled, scanned page images are sent to the configured vision service; network fetching is off by default and, when enabled, still honors robots.txt, rate limits and refuses private addresses; legacy .doc/.ppt/.xls must be re-saved in the newer format; scanned PDFs are not searchable until OCR is enabled. Turning the plugin off keeps the knowledge base files in the data directory; remove them from Storage.",
     "detail": "docs/DETAIL.md"
   },
   "panel": {

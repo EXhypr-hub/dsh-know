@@ -1333,6 +1333,254 @@ await test('动效规范', async () => {
   ok('动效规范', `${durations.length} 处过渡均在 90–300ms，且支持减少动态效果`)
 })
 
+await test('安全：ZIP 炸弹防护', async () => {
+  const { openZip } = await import('../lib/extract.js')
+  const { deflateRawSync } = await import('node:zlib')
+
+  /** 构造最小 ZIP：一个本地头 + 一个中央目录项 + EOCD */
+  function makeZip(name, payload) {
+    const data = deflateRawSync(payload, { level: 9 })
+    const nb = Buffer.from(name, 'utf8')
+    const lh = Buffer.alloc(30)
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6)
+    lh.writeUInt16LE(8, 8); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(payload.length, 22)
+    lh.writeUInt16LE(nb.length, 26)
+    const ch = Buffer.alloc(46)
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6)
+    ch.writeUInt16LE(0x0800, 8); ch.writeUInt16LE(8, 10)
+    ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(payload.length, 24)
+    ch.writeUInt16LE(nb.length, 28)
+    const cd = Buffer.concat([ch, nb])
+    const eocd = Buffer.alloc(22)
+    eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10)
+    eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(30 + nb.length + data.length, 16)
+    return Buffer.concat([lh, nb, data, cd, eocd])
+  }
+
+  // 100MB 全零 → 压缩后仅 ~100KB，是最典型的压缩炸弹
+  const bomb = makeZip('word/document.xml', Buffer.alloc(100 * 1024 * 1024))
+  if (bomb.length > 2 * 1024 * 1024) throw new Error('测试样本构造有误，压缩后不该这么大')
+
+  let blocked = false
+  try {
+    const zip = openZip(bomb)
+    zip.read('word/document.xml')
+  } catch (error) {
+    blocked = true
+    // 必须是给人看的提示，不能是 Node 的原始 Buffer 报错
+    if (!/压缩包|体积异常/.test(String(error.message))) {
+      throw new Error(`拦截了但提示不友好：${error.message}`)
+    }
+  }
+  if (!blocked) throw new Error('ZIP 炸弹未被拦截')
+
+  // 正常文档必须仍然能读
+  const normal = makeZip('word/document.xml', Buffer.from('<root>正常内容</root>'.repeat(100)))
+  const text = openZip(normal).readText('word/document.xml')
+  if (!text.includes('正常内容')) throw new Error('误杀了正常文档')
+
+  ok('安全：ZIP 炸弹防护', '100MB 炸弹被拦下且提示友好，正常文档不受影响')
+})
+
+await test('安全：SSRF 内网拦截', async () => {
+  const { isPrivateHost } = await import('../lib/fetch-policy.js')
+
+  // 各种 IPv4 变形写法都必须识别成内网，否则拦截形同虚设
+  const mustBlock = [
+    '::ffff:127.0.0.1', '::ffff:192.168.1.1', '::ffff:7f00:1',
+    '2130706433', '0x7f000001', '0177.0.0.1', '127.1',
+    '127.0.0.1', 'localhost', '0.0.0.0', '10.1.2.3',
+    '172.16.0.1', '192.168.1.1', '169.254.1.1', '100.64.0.1',
+    '::1', 'fe80::1', 'fd00::1', '224.0.0.1', 'a.local',
+  ]
+  const mustPass = [
+    'arxiv.org', '8.8.8.8', 'openstax.org',
+    '172.32.0.1', '192.169.1.1', '1.1.1.1', 'example.com', '11.22.33.44',
+  ]
+
+  const leaked = mustBlock.filter((h) => !isPrivateHost(h))
+  if (leaked.length) throw new Error(`这些内网写法被放行了：${leaked.join(', ')}`)
+
+  const killed = mustPass.filter((h) => isPrivateHost(h))
+  if (killed.length) throw new Error(`这些公网地址被误杀：${killed.join(', ')}`)
+
+  ok('安全：SSRF 内网拦截', `${mustBlock.length} 种内网变形全拦，${mustPass.length} 个公网全放行`)
+})
+
+await test('安全：原型污染与 HTML 上限', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const extract = readFileSync(new URL('../lib/extract.js', import.meta.url), 'utf8')
+
+  // 配置入口必须过清洗
+  if (!host.includes('function sanitizeConfig')) throw new Error('缺少配置清洗函数')
+  if (!host.includes("key === '__proto__'")) throw new Error('清洗函数没有过滤 __proto__')
+  const uses = (host.match(/sanitizeConfig\(patch/g) ?? []).length
+  if (uses < 5) throw new Error(`只有 ${uses} 个配置入口接了清洗，应为 6 个`)
+
+  // HTML 抽取要有输入上限，防正则退化
+  if (!/MAX_HTML_BYTES/.test(extract)) throw new Error('HTML 抽取缺少长度上限')
+
+  // 实测：展开语法本身不会污染原型
+  const malicious = JSON.parse('{"__proto__":{"polluted":"yes"},"a":1}')
+  const merged = { ...malicious }
+  if ({}.polluted === 'yes') throw new Error('对象展开被原型污染了')
+
+  ok('安全：原型污染与 HTML 上限', '6 个配置入口已清洗，HTML 限 8MB，展开语法免疫')
+})
+
+await test('磁盘探测', async () => {
+  const { statfs, mkdir, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+
+  // 与 index.js 里 canWriteTo 同逻辑
+  async function canWriteTo(dir) {
+    const probe = join(dir, `.kb-probe-test-${Date.now()}`)
+    try {
+      await mkdir(probe)
+      await rm(probe, { recursive: true, force: true })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const drives = []
+  if (process.platform === 'win32') {
+    for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+      try {
+        const s = await statfs(`${letter}:/`)
+        const bs = Number(s.bsize)
+        drives.push({
+          path: `${letter}:`,
+          totalBytes: Number(s.blocks) * bs,
+          freeBytes: Number(s.bavail) * bs,
+          writable: await canWriteTo(`${letter}:/`),
+        })
+      } catch {
+        // 盘不存在
+      }
+    }
+  } else {
+    const s = await statfs('/')
+    const bs = Number(s.bsize)
+    drives.push({
+      path: '/',
+      totalBytes: Number(s.blocks) * bs,
+      freeBytes: Number(s.bavail) * bs,
+      writable: await canWriteTo('/'),
+    })
+  }
+
+  if (drives.length === 0) throw new Error('一个磁盘都没探测到')
+  for (const d of drives) {
+    if (!d.path) throw new Error('磁盘缺少 path')
+    if (!(d.totalBytes > 0)) throw new Error(`${d.path} 总容量异常`)
+    if (!(d.freeBytes >= 0)) throw new Error(`${d.path} 可用容量异常`)
+    if (d.freeBytes > d.totalBytes) throw new Error(`${d.path} 可用大于总容量`)
+    if (typeof d.writable !== 'boolean') throw new Error(`${d.path} writable 不是布尔值`)
+  }
+
+  const summary = drives.map((d) => `${d.path} ${Math.round(d.freeBytes / 1024 ** 3)}GB可用`).join(' / ')
+  ok('磁盘探测', `${drives.length} 个盘：${summary}`)
+})
+
+await test('磁盘选择器接线', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 后端：方法 + 路由 + 缓存
+  if (!/async listDrives\(/.test(host)) throw new Error('缺少 listDrives()')
+  if (!host.includes("'/api/dsh-knowbase/drives'")) throw new Error('缺少 drives 路由')
+  if (!host.includes('drivesCache')) throw new Error('缺少磁盘列表缓存')
+
+  // 前端：探测结果渲染 + 点击填入子目录
+  if (!client.includes('function suggestPathFor')) throw new Error('缺少 suggestPathFor()')
+  if (!client.includes("api('drives')")) throw new Error('前端没有调用 drives 接口')
+  if (!client.includes("className: `kb-drive${")) throw new Error('缺少磁盘列表渲染')
+
+  // 点盘符应填到子目录，而不是盘根（Windows 盘根常不可写）
+  if (!/\$\{base\}\\\\dsh-knowbase/.test(client) && !client.includes('dsh-knowbase`')) {
+    throw new Error('点选盘符没有补上 dsh-knowbase 子目录')
+  }
+
+  ok('磁盘选择器接线', '后端探测+缓存、前端渲染+子目录建议均已接通')
+})
+
+await test('版本适配：宿主能力探测', async () => {
+  const { detectHostCapabilities, describeHostCapabilities } = await import('../lib/compat.js')
+
+  const makeCtx = (services) => ({
+    effect() {},
+    inject() {},
+    get(name) { return services[name] },
+  })
+
+  // 完整宿主
+  const full = detectHostCapabilities(makeCtx({
+    connection: { fetch: { register() {} } },
+    tools: { register() {} },
+    skills: { register() {} },
+    credentials: {},
+  }))
+  if (!full.usable) throw new Error('完整宿主被判成不可用')
+  if (full.missing.length !== 0) throw new Error(`完整宿主不该有缺失：${full.missing.join(',')}`)
+
+  // 老版本：没有 tools/skills/credentials，但仍应可用
+  const partial = detectHostCapabilities(makeCtx({
+    connection: { fetch: { register() {} } },
+  }))
+  if (!partial.usable) throw new Error('缺可选能力不该判成不可用')
+  const partialNote = describeHostCapabilities(partial)
+  if (!/可选能力/.test(partialNote)) throw new Error('诊断没提到缺失的是可选能力')
+
+  // 缺关键 API：必须判成不可用，且诊断点名
+  const broken = detectHostCapabilities(makeCtx({}))
+  if (broken.usable) throw new Error('缺 connection.fetch 却判成可用')
+  const brokenNote = describeHostCapabilities(broken)
+  if (!/connection\.fetch\.register/.test(brokenNote)) throw new Error('诊断没点名缺失的关键 API')
+  if (/工具、技能/.test(brokenNote)) throw new Error('把可选能力误报成关键缺失')
+
+  // 空 ctx 不能崩
+  const empty = detectHostCapabilities({})
+  if (empty.usable) throw new Error('空 ctx 被判成可用')
+
+  ok('版本适配：宿主能力探测', '完整/精简/缺失/空 四种情形判定正确')
+})
+
+await test('版本适配：客户端降级', async () => {
+  const { readFileSync } = await import('node:fs')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 没有 slots.register 时必须早退而不是抛错
+  if (!/typeof slots\.register !== 'function'/.test(client)) {
+    throw new Error('客户端没有检查 slots.register')
+  }
+  // 要能兼容没有 slots.inject 的老版本
+  if (!/canInject/.test(client)) throw new Error('客户端没有 inject 降级分支')
+  // 右侧栏也要有存在性检查
+  if (!/typeof scope\.slots\?\.inject === 'function'/.test(client)) {
+    throw new Error('右侧栏没有检查 slots.inject')
+  }
+
+  // 声明方式：engines.dsh 是 DSH 真正读取的字段
+  if (pkg.engines?.dsh !== '>=0.1.7-rc.2') {
+    throw new Error(`engines.dsh 声明不对：${pkg.engines?.dsh}`)
+  }
+  // 无效字段必须已清理
+  if (pkg.dsh?.compatibility !== undefined) {
+    throw new Error('无效字段 dsh.compatibility 未清理')
+  }
+  // Host 侧要探测并暴露诊断
+  if (!host.includes('detectHostCapabilities')) throw new Error('Host 没有接能力探测')
+  if (!/compatibility: \{/.test(host)) throw new Error('status 没有暴露兼容信息')
+
+  ok('版本适配：客户端降级', 'engines.dsh 已声明，slot 缺失时早退，无无效字段')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

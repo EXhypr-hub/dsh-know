@@ -540,6 +540,65 @@ window.__ModuleLoader__.load({
 }
 .kb-empty-actions .kb-btn { gap: 6px; }
 
+.kb-drives {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+.kb-drive {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease,
+              transform 90ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.kb-drive:hover {
+  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.kb-drive:active { transform: scale(0.99); }
+.kb-drive-name {
+  font-weight: 600;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  min-width: 34px;
+}
+.kb-drive-free {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+  margin-left: auto;
+}
+.kb-drive-total {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+  opacity: 0.6;
+  font-size: 11px;
+}
+.kb-drive-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 18%, transparent);
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-drive-badge-warn {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 18%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+.kb-drive-tight .kb-drive-free { color: var(--dsw-alias-state-warn-primary); }
+.kb-warn { color: var(--dsw-alias-state-warn-primary); }
+
 /* ── 添加数据源 ── */
 .kb-source-menu {
   flex: none;
@@ -1425,6 +1484,14 @@ window.__ModuleLoader__.load({
     'storage.wiped': '已清空，可以重新建库了',
     'storage.export': '导出引用清单',
     'storage.exporting': '导出中…',
+    'storage.dataRootTip': '知识库的索引、原文件副本和本地模型都放在这个目录下。换目录后需要重启 DSH 生效。',
+    'storage.detecting': '正在探测本机磁盘…',
+    'storage.noDrives': '没有探测到可用磁盘，请手动填写路径。',
+    'storage.driveClick': '点一下填入这个盘上的默认目录',
+    'storage.driveReadOnly': '这个盘的根目录不可写，点一下会填入它下面的子目录',
+    'storage.free': '可用',
+    'storage.readOnly': '根目录只读',
+    'storage.lowSpace': '空间偏低',
     'storage.dataRoot': '数据目录',
     'storage.saveRoot': '保存路径',
     'storage.migrate': '立即迁移',
@@ -4463,6 +4530,14 @@ window.__ModuleLoader__.load({
      * 强行合并成一个「保存」会让人分不清到底存了哪一项。
      * 抽屉底部只放「恢复默认」。
      */
+    /**
+     * 设置面板的配置缓存。
+     *
+     * 抽屉每打开一次都会重新挂载，没有缓存就会连发两个请求。
+     * 这里按库 id 缓存 60 秒，保存或恢复默认时主动失效。
+     */
+    const settingsCache = new Map()
+
     function SettingsBody({ collectionId, onChanged }) {
       const t = useT()
       const [advancedOpen, setAdvancedOpen] = useState(true)
@@ -4471,12 +4546,20 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [message, setMessage] = useState(null)
 
-      const load = useCallback(async () => {
+      const load = useCallback(async ({ force = false } = {}) => {
+        const key = String(collectionId)
+        const cached = settingsCache.get(key)
+        if (!force && cached && Date.now() - cached.at < 60_000) {
+          setChunk(cached.chunk)
+          setSearch(cached.search)
+          return
+        }
         try {
           const [c, s] = await Promise.all([
             api('chunk-config', { action: 'get', collectionId }),
             api('search-settings', { action: 'get', collectionId }),
           ])
+          settingsCache.set(key, { chunk: c, search: s, at: Date.now() })
           setChunk(c)
           setSearch(s)
         } catch (err) {
@@ -4505,6 +4588,7 @@ window.__ModuleLoader__.load({
             },
           })
           setChunk(next)
+          settingsCache.delete(String(collectionId))
           setMessage({ kind: 'ok', text: t('settings.saved') })
         } catch (err) {
           setMessage({ kind: 'err', text: err.message })
@@ -4532,6 +4616,7 @@ window.__ModuleLoader__.load({
           ])
           setChunk(c)
           setSearch(s)
+          settingsCache.delete(String(collectionId))
           setMessage({ kind: 'ok', text: t('settings.resetDone') })
           onChanged?.()
         } catch (err) {
@@ -4677,6 +4762,18 @@ window.__ModuleLoader__.load({
     }
 
     /* ══════════════════════════ 设置抽屉结束 ══════════════════════════ */
+
+    /**
+     * 点一个盘符时，给一个能直接用的默认目录。
+     *
+     * Windows 的盘根经常不可写（实测 D:\ 就是），所以默认落到盘下一个
+     * 子目录，而不是直接把盘符当数据目录。
+     */
+    function suggestPathFor(drive) {
+      const base = drive.path.replace(/[\\/]+$/, '')
+      if (/^[A-Za-z]:$/.test(base)) return `${base}\\dsh-knowbase`
+      return `${base}/dsh-knowbase`
+    }
 
     /* ══════════════════════════ 基础交互组件 ══════════════════════════ */
 
@@ -5174,17 +5271,20 @@ window.__ModuleLoader__.load({
       const [confirmText, setConfirmText] = useState('')
       const [keepModels, setKeepModels] = useState(true)
       const [dataRoot, setDataRoot] = useState(null)
+      const [drives, setDrives] = useState(null)
       const [rootInput, setRootInput] = useState('')
       const [moving, setMoving] = useState(false)
 
       const load = useCallback(async () => {
         try {
-          const [u, root] = await Promise.all([
+          const [u, root, disk] = await Promise.all([
             api('usage'),
             api('data-root', { action: 'get' }),
+            api('drives').catch(() => []),
           ])
           setUsage(u)
           setDataRoot(root)
+          setDrives(Array.isArray(disk) ? disk : [])
           setRootInput((cur) => cur || root.current)
         } catch (err) {
           setMessage({ kind: 'err', text: err.message })
@@ -5305,22 +5405,48 @@ window.__ModuleLoader__.load({
 
         /* 数据目录 */
         h('div', { className: 'kb-field', style: { marginTop: 14 } },
-          h('label', { className: 'kb-field-label' }, t('storage.dataRoot')),
-          h('div', { className: 'kb-presets' },
-            [
-              ['D 盘（推荐）', 'D:\\34096\\dsh-knowbase'],
-              ['C 盘', 'C:\\Users\\34096\\.dsh\\knowbase'],
-            ].map(([label, path]) => h('button', {
-              key: path,
-              className: 'kb-chip',
-              onClick: () => setRootInput(path),
-            }, label)),
+          h('label', { className: 'kb-field-label' },
+            h('span', { className: 'kb-field-label-text' },
+              t('storage.dataRoot'),
+              h(Tip, { text: t('storage.dataRootTip') }),
+            ),
           ),
+
+          /* 实时探测本机磁盘，不写死盘符 */
+          drives === null
+            ? h('div', { className: 'kb-field-hint' }, t('storage.detecting'))
+            : drives.length === 0
+              ? h('div', { className: 'kb-field-hint kb-warn' }, t('storage.noDrives'))
+              : h('div', { className: 'kb-drives' },
+                  drives.map((drive) => {
+                    const tight = drive.freeBytes < 2 * 1024 ** 3
+                    return h('button', {
+                      key: drive.path,
+                      className: `kb-drive${tight ? ' kb-drive-tight' : ''}`,
+                      onClick: () => setRootInput(suggestPathFor(drive)),
+                      title: drive.writable
+                        ? t('storage.driveClick')
+                        : t('storage.driveReadOnly'),
+                    },
+                      h('span', { className: 'kb-drive-name' }, drive.path),
+                      h('span', { className: 'kb-drive-free' },
+                        `${t('storage.free')} ${formatBytes(drive.freeBytes)}`),
+                      h('span', { className: 'kb-drive-total' },
+                        `/ ${formatBytes(drive.totalBytes)}`),
+                      drive.writable ? null : h('span', { className: 'kb-drive-badge' },
+                        t('storage.readOnly')),
+                      tight ? h('span', { className: 'kb-drive-badge kb-drive-badge-warn' },
+                        t('storage.lowSpace')) : null,
+                    )
+                  }),
+                ),
+
           h('input', {
             className: 'kb-input',
+            style: { marginTop: 8 },
             value: rootInput,
             onChange: (e) => setRootInput(e.target.value),
-            placeholder: 'C:\\Users\\34096\\.dsh\\knowbase',
+            placeholder: 'C:\\Users\\你\\.dsh\\knowbase',
           }),
           h('div', { className: 'kb-field-hint' },
             '改路径后重启 DSH 生效。想立刻搬数据，点「立即迁移」——'
@@ -5377,6 +5503,25 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale'],
       apply(ctx) {
         /*
+         * 版本适配：先探测客户端 API，再决定怎么注册。
+         *
+         * 不猜版本号——看 API 在不在。缺 slots 时界面根本挂不上，
+         * 与其抛异常让整个 slot 条目变空白，不如什么都不注册，
+         * 让宿主显示它自己的占位。
+         */
+        const slots = ctx?.slots
+        if (slots === undefined || typeof slots.register !== 'function') {
+          console.error(
+            'dsh-knowbase: 当前 DSH 客户端没有提供 slots.register，界面不可用。'
+            + '知识库的工具和检索功能不受影响；请升级 DeepSeek Harness。',
+          )
+          return
+        }
+        // inject 是较新的 API，老版本直接 register 也能工作
+        const canInject = typeof slots.inject === 'function'
+
+
+        /*
          * 注册界面字典并接上翻译函数。
          * 若 locale 服务不可用（或字典缺 key），回落到内置中文，
          * 避免界面上直接露出 header.title 这种原始 key。
@@ -5401,24 +5546,44 @@ window.__ModuleLoader__.load({
           setTranslator((key, params) => fmt(DICT.zh[key] ?? key, params))
         }
 
-        ctx.slots.inject('sidebar.panellist', () =>
-          ctx.slots.register(
-            {
-              name: 'sidebar.panellist',
-              id: 'dsh-knowbase',
-              order: 30,
-              label: () => '知识库',
-            },
-            (props) => h(KnowledgeIcon, {
-              size: typeof props?.size === 'number' ? props.size : 20,
-              active: props?.active === true,
-            }),
-          ),
+        /*
+         * 注册左侧栏图标与主面板。
+         * 有 slots.inject 就用它（宿主会在声明塌陷时自动清理并重装）；
+         * 老版本没有 inject，退回直接 register。
+         */
+        const registerPanelList = () => slots.register(
+          {
+            name: 'sidebar.panellist',
+            id: 'dsh-knowbase',
+            order: 30,
+            label: () => '知识库',
+          },
+          (props) => h(KnowledgeIcon, {
+            size: typeof props?.size === 'number' ? props.size : 20,
+            active: props?.active === true,
+          }),
         )
 
-        ctx.slots.inject('main', () =>
-          ctx.slots.register({ name: 'main', key: 'dsh-knowbase' }, Panel),
+        const registerMain = () => slots.register(
+          { name: 'main', key: 'dsh-knowbase' },
+          Panel,
         )
+
+        if (canInject) {
+          slots.inject('sidebar.panellist', () => registerPanelList())
+          slots.inject('main', () => registerMain())
+        } else {
+          // 老版本：直接注册，没有自动重装能力
+          try {
+            registerPanelList()
+            registerMain()
+          } catch (error) {
+            console.error(
+              'dsh-knowbase: 界面注册失败，可能是 DSH 版本过旧。'
+              + String(error instanceof Error ? error.message : error),
+            )
+          }
+        }
 
         /* ── 右侧栏：聊天时可并排搜索 ── */
         ctx.inject(['sidebarRightTabs'], (scope) => {
@@ -5441,9 +5606,17 @@ window.__ModuleLoader__.load({
               }),
             )
             disposers.push(
-              scope.slots.inject('sidebar.right.pane.tab', () =>
-                scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-knowbase' }, SidePane),
-              ),
+              typeof scope.slots?.inject === 'function'
+                ? scope.slots.inject('sidebar.right.pane.tab', () =>
+                    scope.slots.register(
+                      { name: 'sidebar.right.pane.tab', key: 'dsh-knowbase' },
+                      SidePane,
+                    ),
+                  )
+                : scope.slots.register(
+                    { name: 'sidebar.right.pane.tab', key: 'dsh-knowbase' },
+                    SidePane,
+                  ),
             )
           } catch {
             for (const dispose of disposers) dispose()

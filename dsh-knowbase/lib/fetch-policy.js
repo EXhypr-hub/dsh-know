@@ -20,26 +20,89 @@ const lastRequestAt = new Map()
 /** robots 规则缓存 */
 const robotsCache = new Map()
 
+/**
+ * 把各种 IPv4 写法解析成四个 0–255 的数，解析不了返回 null。
+ *
+ * 必须覆盖这些变形，否则内网拦截形同虚设：
+ *   2130706433      → 127.0.0.1（十进制整数）
+ *   0x7f000001      → 127.0.0.1（十六进制）
+ *   0177.0.0.1      → 127.0.0.1（八进制）
+ *   127.1           → 127.0.0.1（省略段）
+ */
+function parseIpv4(host) {
+  const parts = String(host).split('.')
+  if (parts.length === 0 || parts.length > 4) return null
+
+  const nums = []
+  for (const part of parts) {
+    if (part === '') return null
+    let value
+    if (/^0x[0-9a-f]+$/i.test(part)) value = parseInt(part.slice(2), 16)
+    else if (/^0[0-7]+$/.test(part)) value = parseInt(part.slice(1), 8)
+    else if (/^\d+$/.test(part)) value = parseInt(part, 10)
+    else return null
+    if (!Number.isFinite(value) || value < 0) return null
+    nums.push(value)
+  }
+
+  /*
+   * 按 inet_aton 的规则展开：
+   * 最后一段承载剩余的所有字节（127.1 → 127.0.0.1）。
+   */
+  const last = nums.pop()
+  const maxLast = 256 ** (4 - nums.length)
+  if (last >= maxLast) return null
+  for (let i = nums.length - 1; i >= 0; i--) {
+    if (nums[i] > 255) return null
+  }
+  const expanded = [...nums]
+  for (let i = 4 - nums.length - 1; i >= 0; i--) {
+    expanded.push(Math.floor(last / (256 ** i)) % 256)
+  }
+  return expanded.length === 4 ? expanded : null
+}
+
 /** 内网 / 回环 / 保留地址判断 */
 export function isPrivateHost(hostname) {
-  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
+  let host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
   if (host === '') return true
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
-  if (host === '::1' || host === '::') return true
 
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  // IPv6 映射到 IPv4 的写法：::ffff:127.0.0.1
+  const mapped = host.match(/^::ffff:(.+)$/)
+  if (mapped) host = mapped[1]
+  // 十六进制形式的尾部：::ffff:7f00:1
+  const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16)
+    const lo = parseInt(mappedHex[2], 16)
+    host = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`
+  }
+
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
+  if (host === '::1' || host === '::' || host === '0:0:0:0:0:0:0:1') return true
+
+  // 先按各种 IPv4 写法尝试解析，能解析就以解析结果为准
+  const ipv4 = parseIpv4(host)
   if (ipv4) {
-    const a = Number(ipv4[1])
-    const b = Number(ipv4[2])
+    const [a, b] = ipv4
     if (a === 10 || a === 127 || a === 0) return true
-    if (a === 169 && b === 254) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 192 && b === 168) return true
-    if (a === 100 && b >= 64 && b <= 127) return true
+    if (a === 169 && b === 254) return true            // 链路本地
+    if (a === 172 && b >= 16 && b <= 31) return true   // 私有
+    if (a === 192 && b === 168) return true            // 私有
+    if (a === 100 && b >= 64 && b <= 127) return true  // 运营商级 NAT
+    if (a >= 224) return true                          // 组播与保留
     return false
   }
 
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true
+  // IPv6 唯一本地 / 链路本地 / 组播
+  if (/^f[cd]/.test(host) || host.startsWith('fe80') || host.startsWith('ff')) return true
+
+  /*
+   * 兜底：解析不出结构、但看起来全是数字与点和 x 的主机名，
+   * 一律当作可疑地址拒绝——宁可误伤也不能放行内网。
+   */
+  if (/^[0-9a-fx.:]+$/.test(host) && /\d/.test(host)) return true
+
   return false
 }
 

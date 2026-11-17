@@ -1,6 +1,6 @@
 {
   "name": "dsh-knowbase",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "DSH 本地知识库插件：文档导入、语义检索、权威来源采集",
   "type": "module",
@@ -14,8 +14,7 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg",
-    "./docs/*": "./docs/*"
+    "./icon": "./icon.svg"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.2",
@@ -33,15 +32,13 @@
       "inject": [
         "@deepseek-ai/dsh-client-locale"
       ]
-    },
-    "compatibility": {
-      "dshReleases": {
-        "0.2.2-rc.1+": "compatible"
-      }
     }
   },
   "scripts": {
-    "selftest": "node scripts/selftest.mjs"
+    "selftest": "node scripts/selftest.mjs",
+    "slim": "node scripts/slim.mjs",
+    "slim:restore": "node scripts/slim.mjs --restore",
+    "slim:check": "node scripts/slim.mjs --dry-run"
   },
   "files": [
     "index.js",
@@ -51,6 +48,21 @@
     "locale/*.json",
     "icon.svg",
     "docs",
-    "README.md"
+    "README.md",
+    "scripts/slim.mjs"
+  ],
+  "engines": {
+    "node": ">=22.12.0",
+    "dsh": ">=0.1.7-rc.2"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "knowledge-base",
+    "rag",
+    "embedding",
+    "rerank",
+    "ocr",
+    "local-first"
   ]
 }

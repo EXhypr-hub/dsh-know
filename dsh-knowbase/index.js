@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, unlink, stat, readdir, rm, mkdir, copyFile } from 'node:fs/promises'
+import { readFile, writeFile, unlink, stat, statfs, readdir, rm, mkdir, copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 
@@ -25,6 +25,7 @@ import { applyRerank } from './lib/rerank.js'
 import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
 import { sha256Of } from './lib/models.js'
+import { detectHostCapabilities, describeHostCapabilities } from './lib/compat.js'
 import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
@@ -38,13 +39,52 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.5.0'
-const STAGE = 'UI'
+const VERSION = '0.6.0'
+const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
 const MAX_FILE_BYTES = 50 * 1024 * 1024
 /** 单次批量导入的文件数上限（计划书 5.3-4） */
 const MAX_INGEST_FILES = 200
+
+/**
+ * 探测一个目录能否写入：建一个临时目录再立刻删掉。
+ * 失败不抛错，只返回 false——只读挂载点也应当出现在列表里。
+ */
+async function canWriteTo(dir) {
+  const probe = join(dir, `.kb-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  try {
+    await mkdir(probe)
+    await rm(probe, { recursive: true, force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 清洗来自用户输入的配置对象。
+ *
+ * 现有配置合并都用对象展开语法，实测不会被 `__proto__` 污染原型
+ * （展开走 CreateDataProperty，不触发 setter）。这里再做一道显式过滤，
+ * 防止将来有人改成 Object.assign 或递归 merge 时重新引入风险。
+ */
+function sanitizeConfig(value, depth = 0) {
+  if (depth > 5) return undefined
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeConfig(item, depth + 1))
+      .filter((item) => item !== undefined)
+  }
+  const out = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue
+    const cleaned = sanitizeConfig(item, depth + 1)
+    if (cleaned !== undefined) out[key] = cleaned
+  }
+  return out
+}
 
 function defaultDataRoot() {
   const configured = process.env.DSH_KNOWBASE_DIR
@@ -227,6 +267,13 @@ class KnowledgeBase {
     this.tasks = new Map()
     /** OCR 引擎缓存 */
     this.ocrCache = null
+    /** 磁盘列表缓存（30 秒） */
+    this.drivesCache = null
+    /** 向量缓存：key = collectionId|modelId，值已反序列化成 Float32Array */
+    this.vectorCache = new Map()
+    /** 宿主能力探测结果（版本适配用） */
+    this.hostCapabilities = null
+    this.capabilityNote = ''
     this.apiKeyCache = ''
     this.embedderCache = null
     this.rerankerCache = null
@@ -495,6 +542,12 @@ class KnowledgeBase {
     }
     return {
       version: VERSION,
+      // 版本适配：让界面和日志能看到宿主 API 是否齐全
+      compatibility: {
+        usable: this.hostCapabilities?.usable !== false,
+        note: this.capabilityNote || undefined,
+        missing: this.hostCapabilities?.missing ?? [],
+      },
       stage: STAGE,
       ready: this.ready,
       readyError: this.readyError,
@@ -561,7 +614,8 @@ class KnowledgeBase {
     for (const doc of docs) {
       this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
     }
-    this.store.deleteCollection(id)
+this.store.deleteCollection(id)
+    this.invalidateVectorCache()
   }
 
   listDocuments(collectionId) {
@@ -662,6 +716,7 @@ class KnowledgeBase {
 
       await this.store.saveFile(sha256, ext, buffer)
       this.store.replaceChunks(docId, chunks)
+      this.invalidateVectorCache()
       this.store.updateDocumentStatus(docId, 'ready', {
         pageCount: extracted.meta?.pages ?? null,
         chunkCount: chunks.length,
@@ -679,7 +734,8 @@ class KnowledgeBase {
   deleteDocument(id) {
     const doc = this.store.getDocument(id)
     if (!doc) throw new Error('文档不存在')
-    this.store.deleteDocument(id)
+this.store.deleteDocument(id)
+    this.invalidateVectorCache()
     this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
   }
 
@@ -704,6 +760,7 @@ class KnowledgeBase {
 
       const chunks = chunkSections(sections, this.getChunkConfig(doc.collection_id))
       this.store.replaceChunks(id, chunks)
+      this.invalidateVectorCache()
       this.store.updateDocumentStatus(id, 'ready', {
         pageCount: extracted.meta?.pages ?? null,
         chunkCount: chunks.length,
@@ -763,7 +820,8 @@ class KnowledgeBase {
       const credentials = this.ctx?.get?.('credentials')
       if (credentials?.readRecord) {
         const record = await credentials.readRecord(credentialKey('dsh-knowbase', 'embed-api'))
-        const value = record?.value ?? record?.secret
+        // credentials-local 的 api-key 记录把密钥放在 key 字段；兼容旧数据里的 value/secret
+        const value = record?.key ?? record?.value ?? record?.secret
         if (typeof value === 'string' && value !== '') return value
       }
     } catch {
@@ -780,11 +838,20 @@ class KnowledgeBase {
 
   async saveApiKey(apiKey) {
     const trimmed = String(apiKey ?? '').trim()
+    const key = credentialKey('dsh-knowbase', 'embed-api')
     // 先尝试 DSH 凭据库（不进任何配置文件）
     try {
       const credentials = this.ctx?.get?.('credentials')
       if (credentials?.modifyRecord) {
-        await credentials.modifyRecord(credentialKey('dsh-knowbase', 'embed-api'), async () => (trimmed ? { value: trimmed } : undefined))
+        // records 必须带 kind：写成 { value } 会让凭据库在下次启动时解析失败，
+        // 进而使 credentials 这个必需插件无法激活、整个 host 启动中止。
+        if (trimmed) {
+          await credentials.modifyRecord(key, async () => ({ kind: 'api-key', key: trimmed }))
+        } else if (credentials.deleteRecord) {
+          await credentials.deleteRecord(key)
+        } else {
+          await credentials.modifyRecord(key, async () => ({ kind: 'api-key' }))
+        }
         this.apiKeyCache = trimmed
         return { stored: 'credentials' }
       }
@@ -811,6 +878,7 @@ class KnowledgeBase {
 
   /** 保存嵌入配置。API Key 单独走凭据，不写进这里 */
   setEmbedConfig(patch) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     const current = this.getEmbedConfig()
     const next = {
       ...current,
@@ -906,6 +974,7 @@ class KnowledgeBase {
 
   /** 保存重排配置 */
   setRerankConfig(patch) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     const current = this.getRerankConfig()
     const next = {
       ...current,
@@ -1163,6 +1232,7 @@ class KnowledgeBase {
 
   /** 保存切块配置，值域在这里夹住 */
   setChunkConfig(collectionId, patch = {}) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     if (collectionId === null || collectionId === undefined) {
       throw new Error('必须指定知识库')
     }
@@ -1216,6 +1286,7 @@ class KnowledgeBase {
 
   /** 保存检索设置 */
   setSearchSettings(collectionId, patch = {}) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     if (collectionId === null || collectionId === undefined) {
       throw new Error('必须指定知识库')
     }
@@ -1249,6 +1320,40 @@ class KnowledgeBase {
       buffer: Buffer.from(body, 'utf8'),
       collectionId,
     })
+  }
+
+  /* ────────────────────── 向量缓存 ────────────────────── */
+
+  /**
+   * 取某个库在某个模型下的向量，命中缓存就不重复反序列化。
+   *
+   * 单次检索会碰全部向量；不缓存的话每问一次就把几万个 BLOB 解开一遍。
+   */
+  #vectorsOf(collectionId, modelId) {
+    const key = `${collectionId ?? 'all'}|${modelId}`
+    const cached = this.vectorCache.get(key)
+    if (cached) return cached
+
+    const rows = this.store.listVectors(collectionId, modelId).map((row) => ({
+      ...row,
+      vector: fromBlob(row.vec),
+    }))
+
+    // 只缓存有限的几组，避免长期运行后无限增长
+    if (this.vectorCache.size >= 8) {
+      const oldest = this.vectorCache.keys().next().value
+      if (oldest !== undefined) this.vectorCache.delete(oldest)
+    }
+    this.vectorCache.set(key, rows)
+    return rows
+  }
+
+  /**
+   * 索引发生变化时清空向量缓存。
+   * 导入、删除、重建、清空索引都要调。
+   */
+  invalidateVectorCache() {
+    this.vectorCache.clear()
   }
 
   /* ────────────────────── 长任务 ────────────────────── */
@@ -1345,6 +1450,7 @@ class KnowledgeBase {
 
   /** 保存 OCR 配置 */
   setOcrConfig(patch) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     const current = this.getOcrConfig()
     // apiKey 单独处理，不进 settings
     const { apiKey, ...rest } = patch ?? {}
@@ -1478,6 +1584,74 @@ class KnowledgeBase {
     }
   }
 
+  /* ────────────────────── 磁盘探测 ────────────────────── */
+
+  /**
+   * 列出本机可用于存数据的磁盘。
+   *
+   * 为什么不写死 C/D：不同机器盘符数量差别很大，
+   * 有的只有一个 C，有的分了好几个区。
+   *
+   * @param {{ refresh?: boolean }} options 传 refresh 跳过 30 秒缓存
+   */
+  async listDrives({ refresh = false } = {}) {
+    const now = Date.now()
+    if (!refresh && this.drivesCache && now - this.drivesCache.at < 30_000) {
+      return this.drivesCache.value
+    }
+
+    const candidates = []
+
+    if (process.platform === 'win32') {
+      // 逐个试 A–Z，能 statfs 成功的就是存在的盘
+      for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+        candidates.push({ path: `${letter}:`, probe: `${letter}:/` })
+      }
+    } else {
+      candidates.push({ path: '/', probe: '/' })
+      // macOS 的外接卷、Linux 的挂载点
+      for (const [base, kind] of [['/Volumes', 'mac'], ['/mnt', 'linux'], ['/media', 'linux']]) {
+        let entries = []
+        try {
+          entries = await readdir(base, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+          candidates.push({ path: join(base, entry.name), probe: join(base, entry.name), kind })
+        }
+      }
+    }
+
+    const drives = []
+    for (const candidate of candidates) {
+      let stats
+      try {
+        stats = await statfs(candidate.probe)
+      } catch {
+        continue // 盘不存在或不可访问
+      }
+
+      const blockSize = Number(stats.bsize)
+      const totalBytes = Number(stats.blocks) * blockSize
+      const freeBytes = Number(stats.bavail) * blockSize
+      if (!Number.isFinite(totalBytes) || totalBytes <= 0) continue
+
+      drives.push({
+        path: candidate.path,
+        label: candidate.path,
+        totalBytes,
+        freeBytes,
+        // 可写性单独探测，只读挂载点也列出来但标成不可写
+        writable: await canWriteTo(candidate.probe),
+      })
+    }
+
+    this.drivesCache = { at: now, value: drives }
+    return drives
+  }
+
   /* ────────────────────── 存储统计 ────────────────────── */
 
   /**
@@ -1592,6 +1766,7 @@ class KnowledgeBase {
 
   /** 保存抓取配置 */
   setFetchConfig(patch) {
+    patch = sanitizeConfig(patch ?? {}) ?? {}
     const current = this.getFetchConfig()
     const next = {
       ...current,
@@ -1718,10 +1893,13 @@ class KnowledgeBase {
         })
       }
       this.store.saveEmbeddings(modelId, rows)
+      this.invalidateVectorCache()
 
       done += pending.length
       onProgress?.(done, total)
     }
+
+    this.invalidateVectorCache()
 
     return {
       modelId,
@@ -1779,12 +1957,17 @@ class KnowledgeBase {
       }
     }
 
-    // 全量打分（10 万块以内暴力扫描够用）
-    const rows = this.store.listVectors(collectionId, status.modelId)
+    /*
+     * 全量打分（10 万块以内暴力扫描够用）。
+     *
+     * 性能：向量以 BLOB 存在 SQLite 里，每次检索都 fromBlob 一遍很浪费。
+     * 这里按「库 + 模型」缓存已经反序列化好的 Float32Array，
+     * 索引变动时由 invalidateVectorCache() 清掉。
+     */
+    const rows = this.#vectorsOf(collectionId, status.modelId)
     const scored = []
     for (const row of rows) {
-      const vec = fromBlob(row.vec)
-      const score = cosine(queryVector, vec)
+      const score = cosine(queryVector, row.vector)
       scored.push({
         id: row.chunk_id,
         text: row.text,
@@ -1831,6 +2014,26 @@ class KnowledgeBase {
 
 export function apply(ctx, config) {
   const kb = new KnowledgeBase(ctx, config ?? {})
+
+  /*
+   * 版本适配：先探测宿主能力，再决定注册哪些东西。
+   *
+   * 不猜版本号——直接看 API 在不在。缺关键 API 时记录明确诊断，
+   * 而不是抛异常让整个插件加载失败（那样用户只会看到一句看不懂的报错）。
+   */
+  const caps = detectHostCapabilities(ctx)
+  kb.hostCapabilities = caps
+  kb.capabilityNote = describeHostCapabilities(caps)
+
+  if (!caps.usable) {
+    // 关键 API 缺失：不注册路由，但把原因留在状态里供界面/日志读取
+    try {
+      ctx.logger?.error?.('dsh-knowbase: %s', kb.capabilityNote)
+    } catch {
+      // logger 可能不存在，静默
+    }
+    return
+  }
 
   ctx.effect(() => {
     kb.start()
@@ -2127,6 +2330,10 @@ export function apply(ctx, config) {
         },
       })
     })
+
+    /* ── 磁盘探测 ── */
+    route('/api/dsh-knowbase/drives', async (body) =>
+      json({ ok: true, value: await kb.listDrives({ refresh: body.refresh === true }) }))
 
     /* ── 切块设置 / 检索设置 / 笔记 ── */
     route('/api/dsh-knowbase/chunk-config', (body) => {
