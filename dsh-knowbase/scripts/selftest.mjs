@@ -241,6 +241,24 @@ await test('不支持格式提示', async () => {
   }
 })
 
+// 6b. 扩展名带点/不带点都要认（曾导致 .docx 被误判为不支持）
+await test('扩展名归一化', async () => {
+  const { isSupportedExtension } = await import('../lib/extract.js')
+  const cases = [
+    ['docx', true], ['.docx', true], ['.DOCX', true], ['DOCX', true],
+    ['pdf', true], ['.pdf', true],
+    ['md', true], ['.md', true],
+    ['html', true], ['.html', true],
+    ['doc', false], ['.doc', false],   // 旧版二进制应提示转换
+    ['exe', false], ['.exe', false],
+  ]
+  const wrong = cases.filter(([ext, expect]) => isSupportedExtension(ext) !== expect)
+  if (wrong.length) {
+    throw new Error(`误判: ${wrong.map(([e]) => e).join(', ')}`)
+  }
+  ok('扩展名归一化', `${cases.length} 种写法全部正确`)
+})
+
 // 7. 中文切块质量
 await test('中文切块不碎句', async () => {
   const long = '这是一个测试句子。'.repeat(60)

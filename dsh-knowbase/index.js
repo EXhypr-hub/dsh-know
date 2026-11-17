@@ -139,7 +139,8 @@ class KnowledgeBase {
       throw new Error(`文件过大（${Math.round(buffer.length / 1024 / 1024)}MB），上限 ${MAX_FILE_BYTES / 1024 / 1024}MB`)
     }
 
-    const ext = extname(name).toLowerCase()
+    // 统一为不带点的小写扩展名（.DOCX → docx），避免后续比较出错
+    const ext = extname(name).toLowerCase().replace(/^\./, '')
     if (!isSupportedExtension(ext)) throw new Error(unsupportedReason(ext))
 
     const sha256 = this.store.hashOf(buffer)

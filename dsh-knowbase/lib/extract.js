@@ -297,17 +297,22 @@ export function extractHtml(buffer) {
 const TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'text', 'log', 'csv'])
 const HTML_EXTS = new Set(['html', 'htm', 'xhtml'])
 
-/** 该扩展名是否被支持 */
+/** 归一化扩展名：去掉前导点并转小写 */
+function normalizeExt(ext) {
+  return String(ext ?? '').toLowerCase().replace(/^\./, '')
+}
+
+/** 该扩展名是否被支持（接受带点或不带点） */
 export function isSupportedExtension(ext) {
-  const lower = ext.toLowerCase()
-  return ['pdf', 'docx', 'pptx', 'xlsx', 'doc', 'ppt', 'xls'].includes(lower)
+  const lower = normalizeExt(ext)
+  return ['pdf', 'docx', 'pptx', 'xlsx'].includes(lower)
     || TEXT_EXTS.has(lower)
     || HTML_EXTS.has(lower)
 }
 
 /** 旧版二进制 Office 格式（.doc/.xls/.ppt）提示 */
 export function unsupportedReason(ext) {
-  const lower = ext.toLowerCase()
+  const lower = normalizeExt(ext)
   if (['doc', 'ppt', 'xls'].includes(lower)) {
     return `旧版二进制格式 .${lower} 暂不支持，请用 Office 另存为 .${lower}x 后再导入`
   }

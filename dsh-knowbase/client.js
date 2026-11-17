@@ -36,13 +36,21 @@ window.__ModuleLoader__.load({
 .kb-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   flex: none;
+  min-width: 0;
 }
-.kb-title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-.kb-subtitle { color: var(--dsw-alias-label-secondary); font-size: 11.5px; }
+.kb-header-text { min-width: 0; flex: 1; }
+.kb-title { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.kb-subtitle {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .kb-badge {
   margin-left: auto;
   display: inline-flex;
@@ -126,7 +134,19 @@ window.__ModuleLoader__.load({
   transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
 }
 .kb-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-border-l2); }
-.kb-btn:disabled { opacity: 0.45; cursor: default; }
+.kb-btn:disabled { cursor: default; }
+/* 禁用态：改用中性底色 + 可读文字，避免白字叠浅底看不见 */
+.kb-btn:disabled {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  opacity: 1;
+}
+.kb-btn-primary:disabled {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+}
 .kb-btn-primary {
   background: var(--dsw-alias-brand-primary);
   border-color: var(--dsw-alias-brand-primary);
@@ -658,7 +678,7 @@ window.__ModuleLoader__.load({
         /* 顶栏 */
         h('header', { className: 'kb-header' },
           h(KnowledgeIcon, { size: 22, active: true }),
-          h('div', null,
+          h('div', { className: 'kb-header-text' },
             h('h1', { className: 'kb-title' }, '本地知识库'),
             h('div', { className: 'kb-subtitle' }, '文档导入 · 语义检索 · 权威来源采集'),
           ),
@@ -800,7 +820,7 @@ window.__ModuleLoader__.load({
                             h('div', { className: 'kb-doc-name' },
                               h('div', { className: 'kb-doc-title' }, doc.title),
                               h('div', { className: 'kb-doc-sub' },
-                                `${doc.ext.replace('.', '').toUpperCase()} · ${formatBytes(doc.size)} · ${doc.chunk_count} 块`
+                                `${String(doc.ext ?? '').replace(/^\./, '').toUpperCase()} · ${formatBytes(doc.size)} · ${doc.chunk_count} 块`
                                 + (doc.page_count ? ` · ${doc.page_count} 页` : ''),
                               ),
                             ),
