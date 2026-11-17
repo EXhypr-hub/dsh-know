@@ -108,6 +108,13 @@ window.__ModuleLoader__.load({
 .kb-coll:hover { background: var(--dsw-alias-bg-layer-2); }
 .kb-coll-on { background: var(--dsw-alias-bg-layer-2); font-weight: 600; }
 .kb-coll-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-coll-bytes {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--dsw-alias-label-secondary);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
 .kb-coll-count {
   flex: none;
   font-size: 10.5px;
@@ -525,6 +532,118 @@ window.__ModuleLoader__.load({
   opacity: 0.9;
 }
 
+/* ── 参数校验 ── */
+.kb-validated { display: flex; flex-direction: column; gap: 3px; }
+.kb-input-invalid {
+  border-color: var(--dsw-alias-state-error-primary) !important;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, var(--dsw-alias-bg-layer-1));
+}
+.kb-field-error {
+  font-size: 11px;
+  color: var(--dsw-alias-state-error-primary);
+  line-height: 1.4;
+}
+
+/* ── 首次引导 ── */
+.kb-onboard {
+  padding: 18px 20px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  margin-bottom: 16px;
+}
+.kb-onboard-heading { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.kb-onboard-sub { margin: 0 0 14px; color: var(--dsw-alias-label-secondary); font-size: 12.5px; line-height: 1.6; }
+.kb-onboard-list { display: flex; flex-direction: column; gap: 8px; }
+.kb-onboard-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.kb-onboard-option:hover {
+  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.kb-onboard-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
+  color: var(--dsw-alias-brand-primary);
+  font-size: 10px;
+  font-weight: 700;
+}
+.kb-onboard-body { min-width: 0; flex: 1; }
+.kb-onboard-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.kb-onboard-desc { font-size: 11.5px; color: var(--dsw-alias-label-secondary); line-height: 1.55; }
+.kb-onboard-tag {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+  color: var(--dsw-alias-brand-primary);
+}
+.kb-onboard-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 9px;
+  font-weight: 700;
+}
+.kb-onboard-dot-api { letter-spacing: -0.02em; }
+
+/* ── 切块预览 ── */
+.kb-chunks {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l1);
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 11.5px;
+}
+.kb-chunks-head {
+  color: var(--dsw-alias-label-secondary);
+  margin-bottom: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.kb-chunk {
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--dsw-alias-border-l1);
+}
+.kb-chunk:last-child { border-bottom: 0; }
+.kb-chunk-meta {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10.5px;
+  margin-bottom: 3px;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+}
+.kb-chunk-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  opacity: 0.92;
+}
+
 /* ── 存储与清理 ── */
 .kb-usage {
   border: 1px solid var(--dsw-alias-border-l1);
@@ -582,6 +701,22 @@ window.__ModuleLoader__.load({
   margin-top: 6px;
 }
 .kb-check input { accent-color: var(--dsw-alias-brand-primary); }
+
+.kb-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 520px) { .kb-grid2 { grid-template-columns: 1fr; } }
+.kb-presets { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.kb-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+.kb-chip:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
 
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -685,6 +820,8 @@ window.__ModuleLoader__.load({
     'docs.statusFailed': '失败',
     'docs.statusPending': '处理中',
     'docs.rebuild': '重建',
+    'docs.preview': '看切块',
+    'docs.noChunks': '这份文档还没有切块',
     'docs.deleteConfirm': '删除「{title}」？',
 
     /* 检索 */
@@ -746,6 +883,19 @@ window.__ModuleLoader__.load({
     'fetch.showSources': '查看权威来源（{n}）',
     'fetch.hideSources': '收起来源清单',
 
+    /* 首次引导 */
+    'onboard.title': '先选一下模型方案',
+    'onboard.sub': '嵌入模型负责把文字变成向量，是语义检索的基础。三种方式各有取舍，之后随时能改。',
+    'onboard.local': '本地模型',
+    'onboard.localDesc': '完全离线，不花钱。首次要下载约 600MB，之后不再联网。',
+    'onboard.localTag': '隐私最好',
+    'onboard.api': '接入 API',
+    'onboard.apiDesc': '速度稳、质量好，不吃你电脑。需要服务商 Key，片段会发过去。',
+    'onboard.apiTag': '最省事',
+    'onboard.skip': '先跳过',
+    'onboard.skipDesc': '只用关键词检索，之后在设置里随时开。',
+    'onboard.note': '不确定选哪个？先用「接入 API」——内置 13 家服务商可选，填个 Key 就能用。',
+
     /* 存储与清理 */
     'storage.title': '存储与清理',
     'storage.meta': '看占用了多少，或清空重来',
@@ -763,6 +913,12 @@ window.__ModuleLoader__.load({
     'storage.wipeConfirm': '确认删除',
     'storage.wiping': '删除中…',
     'storage.wiped': '已清空，可以重新建库了',
+    'storage.export': '导出引用清单',
+    'storage.exporting': '导出中…',
+    'storage.dataRoot': '数据目录',
+    'storage.saveRoot': '保存路径',
+    'storage.migrate': '立即迁移',
+    'storage.migrating': '迁移中…',
 
     /* 本地模型 */
     'models.mirror': '下载镜像',
@@ -818,6 +974,8 @@ window.__ModuleLoader__.load({
     'docs.statusFailed': 'Failed',
     'docs.statusPending': 'Processing',
     'docs.rebuild': 'Reindex',
+    'docs.preview': 'Chunks',
+    'docs.noChunks': 'No chunks for this document yet',
     'docs.deleteConfirm': 'Delete "{title}"?',
 
     'search.title': 'Search test',
@@ -1007,6 +1165,7 @@ window.__ModuleLoader__.load({
       const t = useT()
 
       const [status, setStatus] = useState(null)
+      const [embedConfig, setEmbedConfig] = useState(null)
       const [collections, setCollections] = useState([])
       const [activeId, setActiveId] = useState(null)
       const [documents, setDocuments] = useState([])
@@ -1020,6 +1179,7 @@ window.__ModuleLoader__.load({
       const [hits, setHits] = useState(null)
       const [searching, setSearching] = useState(false)
       const [expanded, setExpanded] = useState(new Set())
+      const [chunksOpen, setChunksOpen] = useState(new Set())
 
       const [creating, setCreating] = useState(false)
       const [newName, setNewName] = useState('')
@@ -1066,6 +1226,42 @@ window.__ModuleLoader__.load({
       useEffect(() => { refreshCollections() }, [refreshCollections])
       useEffect(() => { refreshDocuments(activeId) }, [activeId, refreshDocuments])
 
+      /* 首次引导需要知道嵌入方式是否已选 */
+      useEffect(() => {
+        let cancelled = false
+        api('embed', { action: 'get' })
+          .then((value) => { if (!cancelled) setEmbedConfig(value) })
+          .catch(() => { /* 读不到就不显示引导 */ })
+        return () => { cancelled = true }
+      }, [])
+
+      const showOnboarding = embedConfig !== null
+        && embedConfig.provider === 'none'
+        && embedConfig.onboarded !== true
+
+      const finishOnboarding = useCallback(async (way) => {
+        const provider = way === 'none' ? 'none' : way
+        setEmbedConfig((cur) => ({ ...(cur ?? {}), provider, onboarded: true }))
+        try {
+          await api('embed', {
+            action: 'set',
+            config: { provider, onboarded: true },
+          })
+        } catch {
+          // 保存失败也让引导消失，避免卡在引导页
+        }
+      }, [])
+
+      /** 展开/收起某文档的切块预览 */
+      const toggleChunks = useCallback((id) => {
+        setChunksOpen((cur) => {
+          const next = new Set(cur)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+      }, [])
+
       /**
        * 切换知识库：同时清空上一个库的检索状态。
        * 只改 activeId 会留下旧的命中结果，让人以为新库里也有这些内容。
@@ -1079,6 +1275,7 @@ window.__ModuleLoader__.load({
         setQuery('')
         setSearchMode(null)
         setExpanded(new Set())
+        setChunksOpen(new Set())
         setError(null)
         setSearching(false)
       }, [activeId])
@@ -1312,10 +1509,19 @@ window.__ModuleLoader__.load({
                     className: `kb-coll${collection.id === activeId ? ' kb-coll-on' : ''}`,
                     onClick: () => switchCollection(collection.id),
                     onContextMenu: (e) => { e.preventDefault(); removeCollection(collection.id, collection.name) },
-                    title: `${collection.document_count} 份文档 · 右键删除`,
+                    title: [
+                      `${collection.document_count} 份文档`,
+                      `${collection.chunk_count} 个片段`,
+                      formatBytes(collection.bytes ?? 0),
+                      collection.last_activity
+                        ? `最后更新 ${new Date(collection.last_activity).toLocaleDateString('zh-CN')}`
+                        : null,
+                      '右键删除',
+                    ].filter(Boolean).join(' · '),
                   },
                     h('span', { className: 'kb-coll-name' }, collection.name),
                     h('span', { className: 'kb-coll-count' }, collection.document_count),
+                    h('span', { className: 'kb-coll-bytes' }, formatBytes(collection.bytes ?? 0)),
                   )),
             ),
           ),
@@ -1327,6 +1533,15 @@ window.__ModuleLoader__.load({
 
             !status?.ready && status?.readyError
               ? h('div', { className: 'kb-notice kb-notice-err' }, `数据目录不可用：${status.readyError}`)
+              : null,
+
+            /* 首次引导：还没配嵌入、也没跳过过 */
+            showOnboarding
+              ? h(Onboarding, {
+                  config: embedConfig,
+                  onChoose: (way) => finishOnboarding(way),
+                  onSkip: () => finishOnboarding('none'),
+                })
               : null,
 
             activeId === null
@@ -1419,6 +1634,11 @@ window.__ModuleLoader__.load({
                             h('div', { className: 'kb-doc-actions' },
                               h('button', {
                                 className: 'kb-btn kb-btn-sm',
+                                onClick: () => toggleChunks(doc.id),
+                                title: '看看切出来的片段长什么样',
+                              }, chunksOpen.has(doc.id) ? t('common.collapse') : t('docs.preview')),
+                              h('button', {
+                                className: 'kb-btn kb-btn-sm',
                                 disabled: busy,
                                 onClick: () => reindexDocument(doc.id),
                                 title: '重新解析并切块',
@@ -1428,6 +1648,11 @@ window.__ModuleLoader__.load({
                                 onClick: () => removeDocument(doc.id, doc.title),
                               }, t('common.delete')),
                             ),
+
+                            /* 展开后显示实际切出来的片段 */
+                            chunksOpen.has(doc.id)
+                              ? h(ChunkPreview, { key: `c${doc.id}`, documentId: doc.id })
+                              : null,
                           )),
                         ),
                   ),
@@ -2379,6 +2604,38 @@ window.__ModuleLoader__.load({
             '国内直连 huggingface.co 经常失败，建议保持 HF 镜像。'),
         ),
 
+        /* 量化精度与线程数（计划书 4.2） */
+        h('div', { className: 'kb-grid2' },
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, '量化精度'),
+            h('select', {
+              className: 'kb-select',
+              value: config.local.dtype ?? 'q8',
+              onChange: (e) => patchLocal({ dtype: e.target.value }),
+            },
+              h('option', { value: 'q8' }, 'q8 — 默认，体积小速度合适'),
+              h('option', { value: 'q4' }, 'q4 — 更省内存，精度略降'),
+              h('option', { value: 'fp16' }, 'fp16 — 几乎无损，占内存多'),
+              h('option', { value: 'fp32' }, 'fp32 — 最高精度，最占内存'),
+            ),
+            h('div', { className: 'kb-field-hint' },
+              '换精度后需要重建索引——不同精度的向量不能混用。'),
+          ),
+
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, '推理线程数'),
+            h('input', {
+              className: 'kb-input',
+              type: 'number',
+              min: 0, max: 32,
+              value: config.local.threads ?? 0,
+              onChange: (e) => patchLocal({ threads: Number(e.target.value) || 0 }),
+            }),
+            h('div', { className: 'kb-field-hint' },
+              '0 = 交给运行时决定。机器卡顿时调小，比如 4。'),
+          ),
+        ),
+
         /* 模型列表 */
         h('div', { className: 'kb-field' },
           h('label', { className: 'kb-field-label' }, t('models.title')),
@@ -2625,12 +2882,15 @@ window.__ModuleLoader__.load({
 
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' }, t('embed.baseUrl')),
-                h('input', {
-                  className: 'kb-input',
+                h(ValidatedInput, {
+                  field: 'baseUrl',
+                  config,
                   placeholder: 'https://api.siliconflow.cn/v1',
                   value: config.api.baseUrl,
                   onChange: (e) => patchApi({ baseUrl: e.target.value }),
                 }),
+                h('div', { className: 'kb-field-hint' },
+                  '填到 /v1 为止，插件会拼上 /embeddings。'),
               ),
 
               h('div', { className: 'kb-field' },
@@ -2800,6 +3060,168 @@ window.__ModuleLoader__.load({
 
     /* ══════════════════════════ 抓取设置结束 ══════════════════════════ */
 
+    /* ══════════════════════════ 参数校验 ══════════════════════════ */
+
+    /**
+     * 字段级校验（计划书 4.2 的「每个参数旁边有反馈」）。
+     *
+     * 计划书原话是「点一下，插件自己发一个最小请求」。
+     * 这里做成两种粒度：
+     *   - 输入时就地给出格式错误（红框 + 原因），不用等点按钮
+     *   - 整组配置由「测试连接」按钮发一次真实请求
+     * 前者能立刻挡住「漏了 /v1」「Key 带空格」这类常见错误，
+     * 后者验证「地址和 Key 到底通不通」，两者互补。
+     */
+    function validateField(field, config) {
+      const api = config?.api ?? {}
+
+      if (field === 'baseUrl') {
+        const value = String(api.baseUrl ?? '').trim()
+        if (value === '') return { ok: false, message: '必填：服务地址不能为空' }
+        if (!/^https?:\/\//i.test(value)) return { ok: false, message: '必须以 http:// 或 https:// 开头' }
+        if (/\s/.test(value)) return { ok: false, message: '地址里不能有空格' }
+        try {
+          new URL(value)
+        } catch {
+          return { ok: false, message: '这不是一个合法的网址' }
+        }
+        return { ok: true }
+      }
+
+      if (field === 'model') {
+        const value = String(api.model ?? '').trim()
+        if (value === '') return { ok: false, message: '必填：模型名不能为空' }
+        if (/\s/.test(value)) return { ok: false, message: '模型名里不能有空格' }
+        return { ok: true }
+      }
+
+      if (field === 'batchSize') {
+        const n = Number(api.batchSize ?? 0)
+        if (!Number.isFinite(n) || n < 1) return { ok: false, message: '至少为 1' }
+        if (n > 128) return { ok: false, message: '建议不超过 128，太大容易超时' }
+        return { ok: true }
+      }
+
+      return { ok: true }
+    }
+
+    /** 带校验反馈的输入框 */
+    function ValidatedInput({ field, config, className = 'kb-input', ...rest }) {
+      const result = validateField(field, config)
+      const invalid = rest.value !== '' && !result.ok
+      return h('div', { className: 'kb-validated' },
+        h('input', { className: `${className}${invalid ? ' kb-input-invalid' : ''}`, ...rest }),
+        invalid ? h('div', { className: 'kb-field-error' }, result.message) : null,
+      )
+    }
+
+    /* ══════════════════════════ 参数校验结束 ══════════════════════════ */
+
+    /* ══════════════════════════ 首次引导 ══════════════════════════ */
+
+    /**
+     * 首次使用的引导页（计划书 4.1：不预设默认，让用户选）。
+     *
+     * 只在「还没配置嵌入 + 没走过引导」时出现。
+     * 三个入口对应计划书的三种接入方式，选完即写入 onboarded 标记。
+     */
+    function Onboarding({ config, onChoose, onSkip }) {
+      const t = useT()
+
+      const Option = ({ icon, title, desc, tag, onClick }) => h('button', {
+        className: 'kb-onboard-option',
+        onClick,
+      },
+        h('div', { className: 'kb-onboard-icon' }, icon),
+        h('div', { className: 'kb-onboard-body' },
+          h('div', { className: 'kb-onboard-title' }, title),
+          h('div', { className: 'kb-onboard-desc' }, desc),
+          tag ? h('div', { className: 'kb-onboard-tag' }, tag) : null,
+        ),
+      )
+
+      return h('div', { className: 'kb-onboard kb-fade-in' },
+        h('h2', { className: 'kb-onboard-heading' }, t('onboard.title')),
+        h('p', { className: 'kb-onboard-sub' }, t('onboard.sub')),
+
+        h('div', { className: 'kb-onboard-list' },
+          h(Option, {
+            icon: h(KnowledgeIcon, { size: 18 }),
+            title: t('onboard.local'),
+            desc: t('onboard.localDesc'),
+            tag: t('onboard.localTag'),
+            onClick: () => onChoose('local'),
+          }),
+          h(Option, {
+            icon: h('span', { className: 'kb-onboard-dot kb-onboard-dot-api' }, 'API'),
+            title: t('onboard.api'),
+            desc: t('onboard.apiDesc'),
+            tag: t('onboard.apiTag'),
+            onClick: () => onChoose('api'),
+          }),
+          h(Option, {
+            icon: h('span', { className: 'kb-onboard-dot' }, '—'),
+            title: t('onboard.skip'),
+            desc: t('onboard.skipDesc'),
+            onClick: onSkip,
+          }),
+        ),
+
+        h('div', { className: 'kb-field-hint', style: { marginTop: 14 } },
+          t('onboard.note')),
+      )
+    }
+
+    /* ══════════════════════════ 首次引导结束 ══════════════════════════ */
+
+    /* ══════════════════════════ 片段预览 ══════════════════════════ */
+
+    /**
+     * 展开看一份文档实际被切成什么样。
+     * 这是验收切块质量最直接的方式——切碎了、切重了，一眼就能看出来。
+     */
+    function ChunkPreview({ documentId }) {
+      const t = useT()
+      const [chunks, setChunks] = useState(null)
+      const [error, setError] = useState(null)
+
+      useEffect(() => {
+        let cancelled = false
+        api('chunks', { id: documentId })
+          .then((value) => { if (!cancelled) setChunks(value ?? []) })
+          .catch((err) => { if (!cancelled) setError(err.message) })
+        return () => { cancelled = true }
+      }, [documentId])
+
+      if (error) return h('div', { className: 'kb-notice kb-notice-err' }, error)
+      if (chunks === null) return h('div', { className: 'kb-chunks' }, t('common.loading'))
+      if (chunks.length === 0) return h('div', { className: 'kb-chunks' }, t('docs.noChunks'))
+
+      const lens = chunks.map((c) => String(c.text ?? '').length)
+      const avg = Math.round(lens.reduce((a, b) => a + b, 0) / lens.length)
+
+      return h('div', { className: 'kb-chunks kb-fade-in' },
+        h('div', { className: 'kb-chunks-head' },
+          `${chunks.length} 个片段 · 平均 ${avg} 字 · 最短 ${Math.min(...lens)} · 最长 ${Math.max(...lens)}`,
+        ),
+        chunks.slice(0, 50).map((chunk) => h('div', { key: chunk.id, className: 'kb-chunk' },
+          h('div', { className: 'kb-chunk-meta' },
+            `#${chunk.ord}`,
+            chunk.page ? ` · 第 ${chunk.page} 页` : '',
+            chunk.heading ? ` · ${chunk.heading}` : '',
+            ` · ${String(chunk.text ?? '').length} 字`,
+            chunk.kind === 'code' ? ' · 代码块' : '',
+          ),
+          h('div', { className: 'kb-chunk-text' }, String(chunk.text ?? '').slice(0, 400)),
+        )),
+        chunks.length > 50
+          ? h('div', { className: 'kb-chunks-head' }, `只显示前 50 个，共 ${chunks.length} 个`)
+          : null,
+      )
+    }
+
+    /* ══════════════════════════ 片段预览结束 ══════════════════════════ */
+
     /* ══════════════════════════ 存储与清理 ══════════════════════════ */
 
     function StoragePanel({ onWiped }) {
@@ -2810,16 +3232,73 @@ window.__ModuleLoader__.load({
       const [wiping, setWiping] = useState(false)
       const [confirmText, setConfirmText] = useState('')
       const [keepModels, setKeepModels] = useState(true)
+      const [dataRoot, setDataRoot] = useState(null)
+      const [rootInput, setRootInput] = useState('')
+      const [moving, setMoving] = useState(false)
 
       const load = useCallback(async () => {
         try {
-          setUsage(await api('usage'))
+          const [u, root] = await Promise.all([
+            api('usage'),
+            api('data-root', { action: 'get' }),
+          ])
+          setUsage(u)
+          setDataRoot(root)
+          setRootInput((cur) => cur || root.current)
         } catch (err) {
           setMessage({ kind: 'err', text: err.message })
         }
       }, [])
 
       useEffect(() => { load() }, [load])
+
+      const saveRoot = useCallback(async () => {
+        setBusy('root')
+        setMessage(null)
+        try {
+          const next = await api('data-root', { action: 'set', path: rootInput })
+          setDataRoot({ ...dataRoot, configured: next.dataRoot })
+          setMessage({
+            kind: 'ok',
+            text: next.restart
+              ? '路径已记录，重启 DSH 后生效。也可以点「立即迁移」把现有数据搬过去。'
+              : '已恢复默认路径',
+          })
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [rootInput, dataRoot])
+
+      const migrate = useCallback(async () => {
+        setBusy('migrate')
+        setMoving(true)
+        setMessage(null)
+        try {
+          const result = await api('data-root', { action: 'migrate', path: rootInput })
+          setMessage({ kind: 'ok', text: `${result.note}` })
+          await load()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+          setMoving(false)
+        }
+      }, [rootInput, load])
+
+      const exportList = useCallback(async () => {
+        setBusy('export')
+        setMessage(null)
+        try {
+          const result = await api('export', {})
+          setMessage({ kind: 'ok', text: `已导出 ${result.count} 份文档的引用清单：${result.path}` })
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [])
 
       const doWipe = useCallback(async () => {
         setBusy('wipe')
@@ -2873,12 +3352,47 @@ window.__ModuleLoader__.load({
               `按当前 ${counts.documents} 份文档算，平均每份约 ${formatBytes(usage.perDocument)}。`)
           : null,
 
-        h('div', { style: { marginTop: 12, display: 'flex', gap: 8 } },
+        h('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' } },
           h('button', { className: 'kb-btn', onClick: load }, t('storage.refresh')),
+          h('button', { className: 'kb-btn', disabled: busy !== '', onClick: exportList },
+            busy === 'export' ? t('storage.exporting') : t('storage.export')),
           h('button', {
             className: 'kb-btn kb-btn-danger',
             onClick: () => { setWiping((v) => !v); setMessage(null) },
           }, wiping ? t('common.cancel') : t('storage.wipe')),
+        ),
+
+        /* 数据目录 */
+        h('div', { className: 'kb-field', style: { marginTop: 14 } },
+          h('label', { className: 'kb-field-label' }, t('storage.dataRoot')),
+          h('div', { className: 'kb-presets' },
+            [
+              ['D 盘（推荐）', 'D:\\34096\\dsh-knowbase'],
+              ['C 盘', 'C:\\Users\\34096\\.dsh\\knowbase'],
+            ].map(([label, path]) => h('button', {
+              key: path,
+              className: 'kb-chip',
+              onClick: () => setRootInput(path),
+            }, label)),
+          ),
+          h('input', {
+            className: 'kb-input',
+            value: rootInput,
+            onChange: (e) => setRootInput(e.target.value),
+            placeholder: 'C:\\Users\\34096\\.dsh\\knowbase',
+          }),
+          h('div', { className: 'kb-field-hint' },
+            '改路径后重启 DSH 生效。想立刻搬数据，点「立即迁移」——'
+            + '会先复制再逐文件校验哈希，校验不过自动切回原目录，不会丢数据。'),
+          h('div', { style: { display: 'flex', gap: 8, marginTop: 8 } },
+            h('button', { className: 'kb-btn', disabled: busy !== '', onClick: saveRoot },
+              busy === 'root' ? t('common.saving') : t('storage.saveRoot')),
+            h('button', {
+              className: 'kb-btn',
+              disabled: busy !== '' || rootInput === usage.dataRoot,
+              onClick: migrate,
+            }, moving ? t('storage.migrating') : t('storage.migrate')),
+          ),
         ),
 
         wiping

@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, unlink, stat, readdir, rm } from 'node:fs/promises'
+import { readFile, writeFile, unlink, stat, readdir, rm, mkdir, copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 
@@ -24,6 +24,7 @@ import { chunkSections } from './lib/chunk.js'
 import { applyRerank } from './lib/rerank.js'
 import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
+import { sha256Of } from './lib/models.js'
 import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
@@ -84,6 +85,83 @@ async function collectFiles(dir, depth = 0) {
     }
   }
   return out
+}
+
+/** 递归复制目录，跳过另一个目录内部的路径 */
+async function copyDir(from, to, onProgress) {
+  let copied = 0
+  const walk = async (src, dst) => {
+    await mkdir(dst, { recursive: true })
+    let entries
+    try {
+      entries = await readdir(src, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const s = join(src, entry.name)
+      const d = join(dst, entry.name)
+      if (entry.isDirectory()) {
+        await walk(s, d)
+      } else if (entry.isFile()) {
+        await copyFile(s, d)
+        copied++
+        if (copied % 20 === 0) onProgress?.({ done: copied })
+      }
+    }
+  }
+  await walk(from, to)
+  onProgress?.({ done: copied })
+  return copied
+}
+
+/**
+ * 校验复制是否完整：逐文件比对大小与哈希。
+ * 只校验目标目录里存在的文件，源目录多出来的会单独报告。
+ */
+async function verifyCopy(from, to) {
+  const mismatch = []
+  let checked = 0
+
+  const walk = async (src, dst) => {
+    let entries
+    try {
+      entries = await readdir(src, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const s = join(src, entry.name)
+      const d = join(dst, entry.name)
+      if (entry.isDirectory()) {
+        await walk(s, d)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      // WAL/SHM 是运行期临时文件，迁移后重新生成，不参与校验
+      if (/-wal$|-shm$/.test(entry.name)) continue
+
+      try {
+        const [srcInfo, dstInfo] = await Promise.all([stat(s), stat(d)])
+        if (srcInfo.size !== dstInfo.size) {
+          mismatch.push(`${entry.name}（大小 ${srcInfo.size} ≠ ${dstInfo.size}）`)
+          continue
+        }
+        const [a, b] = await Promise.all([readFile(s), readFile(d)])
+        if (await sha256Of(a) !== await sha256Of(b)) {
+          mismatch.push(`${entry.name}（哈希不同）`)
+          continue
+        }
+        checked++
+      } catch (error) {
+        mismatch.push(`${entry.name}（${error instanceof Error ? error.message : String(error)}）`)
+      }
+    }
+  }
+
+  await walk(from, to)
+  return { ok: mismatch.length === 0, checked, mismatch }
 }
 
 /** 本地推理依赖是否可用（只探测，不加载） */async function localLibraryAvailable() {
@@ -610,8 +688,17 @@ class KnowledgeBase {
   static get EMBED_DEFAULTS() {
     return {
       provider: 'none',   // none | api | local
-      api: { baseUrl: '', model: '', dimension: 0, batchSize: 16 },
-      local: { modelId: '', modelDir: '', mirror: 'hf-mirror', dimension: 0 },
+      api: { baseUrl: '', model: '', dimension: 0, batchSize: 16, timeoutMs: 30000, retries: 2 },
+      local: {
+        modelId: '',
+        modelDir: '',
+        mirror: 'hf-mirror',
+        dimension: 0,
+        dtype: 'q8',      // q8 / q4 / fp16 / fp32
+        threads: 0,       // 0 = 交给运行时决定
+      },
+      /** 首次引导是否已完成 */
+      onboarded: false,
     }
   }
 
@@ -796,6 +883,146 @@ class KnowledgeBase {
     const reranker = await this.reranker()
     if (!reranker) throw new Error('尚未配置重排方式')
     return reranker.test()
+  }
+
+  /* ────────────────────── 导出 ────────────────────── */
+
+  /**
+   * 导出引用清单（Markdown）。
+   * 用途：交作业、写综述、备份"我有哪些资料"。
+   */
+  async exportCitations(collectionId = null) {
+    const collections = collectionId
+      ? [this.store.getCollection(collectionId)].filter(Boolean)
+      : this.store.listCollections()
+
+    if (collections.length === 0) throw new Error('没有可导出的知识库')
+
+    const lines = [
+      '# 知识库引用清单',
+      '',
+      `导出时间：${new Date().toLocaleString('zh-CN')}`,
+      '',
+    ]
+
+    let total = 0
+    for (const collection of collections) {
+      const docs = this.store.listDocuments(collection.id)
+      lines.push(`## ${collection.name}`, '')
+      if (docs.length === 0) {
+        lines.push('_（空）_', '')
+        continue
+      }
+      lines.push('| 文档 | 类型 | 页数 | 块数 | 来源 | 许可 |')
+      lines.push('|---|---|---|---|---|---|')
+      for (const doc of docs) {
+        total++
+        const kind = String(doc.ext ?? '').replace(/^\./, '').toUpperCase()
+        const pages = doc.page_count ?? '—'
+        const source = doc.source_url ? `[链接](${doc.source_url})` : '本地文件'
+        const license = doc.license ? doc.license.replace(/\|/g, '\\|') : '未标注'
+        const title = String(doc.title).replace(/\|/g, '\\|')
+        lines.push(`| ${title} | ${kind} | ${pages} | ${doc.chunk_count} | ${source} | ${license} |`)
+      }
+      lines.push('')
+    }
+
+    lines.push('---', '', `共 ${total} 份文档。`, '')
+
+    const dir = join(this.dataRoot, 'exports')
+    await mkdir(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const file = join(dir, `引用清单-${stamp}.md`)
+    await writeFile(file, lines.join('\n'), 'utf8')
+
+    return { path: file, count: total, collections: collections.length }
+  }
+
+  /* ────────────────────── 数据目录 ────────────────────── */
+
+  /** 当前配置的数据目录（设置优先于构造参数） */
+  getDataRoot() {
+    const stored = this.store.getSetting('dataRoot', null)
+    return typeof stored === 'string' && stored.trim() !== '' ? stored.trim() : this.dataRoot
+  }
+
+  /**
+   * 改数据目录。
+   *
+   * 只写设置，不立刻搬——搬数据是重活，得用户明确点「立即迁移」。
+   * 改完提示重启生效，避免运行中两套路径打架。
+   */
+  setDataRoot(next) {
+    const target = String(next ?? '').trim()
+    if (target === '') throw new Error('路径不能为空')
+    if (target === this.dataRoot) {
+      this.store.setSetting('dataRoot', '')
+      return { dataRoot: this.dataRoot, changed: false, restart: false }
+    }
+    this.store.setSetting('dataRoot', target)
+    return { dataRoot: target, changed: true, restart: true }
+  }
+
+  /**
+   * 迁移数据到新目录。
+   *
+   * 顺序刻意如此：先复制 → 再校验 → 校验通过才提示可以删旧的。
+   * 任何一步失败都不动原数据，宁可多占一份空间也不能丢。
+   */
+  async migrateDataRoot(next, { dryRun = false } = {}) {
+    const target = String(next ?? '').trim()
+    if (target === '') throw new Error('路径不能为空')
+    if (target === this.dataRoot) throw new Error('新目录与当前目录相同')
+
+    const task = this.createTask(`迁移数据到 ${target}`, 3)
+    try {
+      this.store.setSetting('dataRoot', target)
+      if (dryRun) {
+        this.settleTask(task, 'done')
+        return { ok: true, dryRun: true, target, note: '仅记录路径，重启后在新目录建库' }
+      }
+
+      // 1. 关库，保证 sqlite 处于一致状态
+      this.store.close()
+      this.touchTask(task, { done: 1 })
+
+      // 2. 复制整个数据目录
+      await mkdir(target, { recursive: true })
+      await copyDir(this.dataRoot, target, async (done) => this.touchTask(task, { done: done.done }))
+      this.touchTask(task, { done: 2 })
+
+      // 3. 校验：逐文件比对大小与哈希
+      const report = await verifyCopy(this.dataRoot, target)
+      this.touchTask(task, { done: 3 })
+
+      if (!report.ok) {
+        // 校验失败：把路径改回去，让插件继续用老目录
+        this.store.setSetting('dataRoot', '')
+        this.settleTask(task, 'failed', `校验失败：${report.mismatch.slice(0, 3).join('; ')}`)
+        throw new Error(
+          `复制后校验不一致，已取消迁移并切回原目录。不一致的文件：${report.mismatch.slice(0, 3).join('、')}`,
+        )
+      }
+
+      this.settleTask(task, 'done')
+      return {
+        ok: true,
+        target,
+        copied: report.checked,
+        note: '校验通过。确认新目录可用后，可手动删除旧目录以释放空间。',
+      }
+    } catch (error) {
+      if (task.state === 'running') this.settleTask(task, 'failed', error)
+      throw error
+    } finally {
+      // 无论成败都把库重新打开，插件不能处于无库状态
+      try {
+        this.store = new KnowledgeStore(this.dataRoot)
+        await this.store.open()
+      } catch {
+        // 重开失败留给下次启动兜底
+      }
+    }
   }
 
   /* ────────────────────── 长任务 ────────────────────── */
@@ -1513,6 +1740,33 @@ export function apply(ctx, config) {
           elapsedMs: Date.now() - state.startedAt,
         },
       })
+    })
+
+    /* ── 导出与数据目录 ── */
+    route('/api/dsh-knowbase/export', async (body) =>
+      json({
+        ok: true,
+        value: await kb.exportCitations(
+          body.collectionId === undefined || body.collectionId === null
+            ? null
+            : Number(body.collectionId),
+        ),
+      }))
+
+    route('/api/dsh-knowbase/data-root', async (body) => {
+      if (body.action === 'get') {
+        return json({
+          ok: true,
+          value: { current: kb.dataRoot, configured: kb.getDataRoot() },
+        })
+      }
+      if (body.action === 'set') {
+        return json({ ok: true, value: kb.setDataRoot(body.path) })
+      }
+      if (body.action === 'migrate') {
+        return json({ ok: true, value: await kb.migrateDataRoot(body.path, { dryRun: body.dryRun === true }) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
     /* ── 长任务、存储统计、全局清理 ── */

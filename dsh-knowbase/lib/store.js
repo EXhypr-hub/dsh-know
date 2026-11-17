@@ -216,7 +216,9 @@ export class KnowledgeStore {
     return this.db.prepare(`
       SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
              (SELECT COUNT(*) FROM documents d WHERE d.collection_id = c.id) AS document_count,
-             (SELECT COALESCE(SUM(d.chunk_count), 0) FROM documents d WHERE d.collection_id = c.id) AS chunk_count
+             (SELECT COALESCE(SUM(d.chunk_count), 0) FROM documents d WHERE d.collection_id = c.id) AS chunk_count,
+             (SELECT COALESCE(SUM(d.size), 0) FROM documents d WHERE d.collection_id = c.id) AS bytes,
+             (SELECT COALESCE(MAX(d.updated_at), c.updated_at) FROM documents d WHERE d.collection_id = c.id) AS last_activity
       FROM collections c
       ORDER BY c.created_at ASC
     `).all()

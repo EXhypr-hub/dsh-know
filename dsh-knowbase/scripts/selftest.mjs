@@ -831,10 +831,12 @@ await test('i18n 字典完整性', async () => {
   if (missing.length) throw new Error(`字典缺 key: ${missing.join(', ')}`)
 
   // t() 只能在组件内部调用（组件外没有 t，会运行时崩溃）
+  // 作用域自动发现：所有缩进 4 空格的具名函数都可能有闭包内的 t
   const lines = src.split('\n')
   const scopes = []
   for (let i = 0; i < lines.length; i++) {
-    if (/^    function (Panel|SidePane|SettingsPanel|LocalModelPicker|RerankPanel|FetchPanel|StoragePanel)\b/.test(lines[i])) {
+    if (/^    (?:async )?function [A-Za-z_$][\w$]*\s*\(/.test(lines[i])) {
+      // 从函数声明行开始，找缩进同为 4 空格的收尾 }
       let end = lines.length - 1
       for (let j = i + 1; j < lines.length; j++) {
         if (lines[j] === '    }') { end = j; break }
@@ -842,6 +844,8 @@ await test('i18n 字典完整性', async () => {
       scopes.push([i, end])
     }
   }
+  if (scopes.length < 8) throw new Error(`作用域发现异常，只找到 ${scopes.length} 个函数`)
+
   const outside = []
   for (let i = 0; i < lines.length; i++) {
     if (!/\bt\('/.test(lines[i])) continue
@@ -850,7 +854,7 @@ await test('i18n 字典完整性', async () => {
   }
   if (outside.length) throw new Error(`t() 在组件外调用，行: ${outside.join(', ')}`)
 
-  ok('i18n 字典完整性', `${uniqueZh.size} 条，${used.length} 个使用中，作用域正确`)
+  ok('i18n 字典完整性', `${uniqueZh.size} 条，${used.length} 个使用中，${scopes.length} 个作用域`)
 })
 
 await test('数据库迁移与备份', async () => {

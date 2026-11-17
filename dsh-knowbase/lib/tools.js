@@ -108,6 +108,8 @@ export function registerTools(ctx, kb) {
             name: c.name,
             documents: c.document_count,
             chunks: c.chunk_count,
+            bytes: c.bytes ?? 0,
+            lastActivity: c.last_activity ? new Date(c.last_activity).toISOString() : null,
           })),
           hint: list.length === 0 ? '还没有知识库，先让用户在界面里新建一个。' : undefined,
         }

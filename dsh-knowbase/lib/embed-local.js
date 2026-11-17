@@ -25,6 +25,10 @@ export class LocalEmbedder {
     this.modelId = String(config?.modelId ?? '').trim()
     this.modelDir = String(config?.modelDir ?? '').trim()
     this.modelsDir = String(config?.modelsDir ?? '').trim()
+    /** 量化精度：q8（默认）/ q4 / fp16 / fp32 */
+    this.dtype = ['q8', 'q4', 'fp16', 'fp32'].includes(config?.dtype) ? config.dtype : 'q8'
+    /** 推理线程数；0 或未填表示交给运行时决定 */
+    this.threads = Number.isFinite(Number(config?.threads)) ? Number(config.threads) : 0
     this.mirror = MIRROR_HOSTS[config?.mirror] ? config.mirror : 'hf-mirror'
     this.dimension = Number(config?.dimension ?? 0)
     this.pipeline = null
@@ -110,14 +114,34 @@ export class LocalEmbedder {
       }
       env.useFSCache = true
 
+      /*
+       * 线程数。ONNX Runtime 默认会吃满所有核心，
+       * 在大模型上这会让整台机器卡住，所以允许用户限一下。
+       */
+      if (Number.isFinite(this.threads) && this.threads > 0) {
+        try {
+          env.backends.onnx.wasm.numThreads = this.threads
+          if (env.backends.onnx.wasm.proxy !== undefined) {
+            env.backends.onnx.wasm.proxy = false
+          }
+        } catch {
+          // 后端不支持线程设置时忽略，不影响推理
+        }
+      }
+
       // 决定从哪里加载模型：
       //   1. 用户手动指定的目录
       //   2. 下载器已经下好的 models/<id>
       //   3. 否则用 catalog 里的仓库名，交给镜像现拉
       const source = await this.resolveSource()
 
+      /*
+       * 量化精度。
+       * q8 体积小、速度可接受，是默认；
+       * q4 更省内存但精度略降；fp16/fp32 基本不损失精度但吃内存。
+       */
       const extractor = await pipeline('feature-extraction', source, {
-        quantized: true,
+        dtype: this.dtype === 'q8' ? 'q8' : this.dtype,
         progress_callback: (event) => {
           if (event?.status === 'progress' && typeof event.progress === 'number') {
             onProgress?.(event.file ?? '', Math.round(event.progress))
