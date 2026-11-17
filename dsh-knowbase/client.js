@@ -556,6 +556,7 @@ window.__ModuleLoader__.load({
       const [searchMode, setSearchMode] = useState(null)
 
       const fileInputRef = useRef(null)
+      const searchSeq = useRef(0)
 
       /* ── 刷新 ── */
       const refreshStatus = useCallback(async () => {
@@ -593,6 +594,23 @@ window.__ModuleLoader__.load({
       useEffect(() => { refreshStatus() }, [refreshStatus])
       useEffect(() => { refreshCollections() }, [refreshCollections])
       useEffect(() => { refreshDocuments(activeId) }, [activeId, refreshDocuments])
+
+      /**
+       * 切换知识库：同时清空上一个库的检索状态。
+       * 只改 activeId 会留下旧的命中结果，让人以为新库里也有这些内容。
+       */
+      const switchCollection = useCallback((id) => {
+        if (id === activeId) return
+        // 让在途检索的返回作废，避免旧库结果写回新库
+        searchSeq.current++
+        setActiveId(id)
+        setHits(null)
+        setQuery('')
+        setSearchMode(null)
+        setExpanded(new Set())
+        setError(null)
+        setSearching(false)
+      }, [activeId])
 
       /* ── 建库 ── */
       const submitCreate = useCallback(async () => {
@@ -691,6 +709,9 @@ window.__ModuleLoader__.load({
         if (!window.confirm(`删除「${title}」？`)) return
         try {
           await api('documents', { action: 'delete', id })
+          // 命中结果可能引用被删文档，一并清掉避免悬空
+          setHits(null)
+          setSearchMode(null)
           await Promise.all([refreshDocuments(activeId), refreshCollections(), refreshStatus()])
         } catch (err) {
           setError(err.message)
@@ -714,19 +735,25 @@ window.__ModuleLoader__.load({
       const runSearch = useCallback(async () => {
         const q = query.trim()
         if (!q) { setHits(null); return }
+
+        // 请求序号：切库或再次检索后，旧请求的返回不再写入状态
+        const seq = ++searchSeq.current
+        const targetId = activeId
+
         setSearching(true)
         setError(null)
         try {
-          const value = await api('search', { query: q, collectionId: activeId, limit: 20 })
+          const value = await api('search', { query: q, collectionId: targetId, limit: 20 })
+          if (seq !== searchSeq.current) return
           // 兼容两种返回：旧版数组 / 新版 { hits, mode, note }
           const list = Array.isArray(value) ? value : (value?.hits ?? [])
           setHits(list)
           setSearchMode(Array.isArray(value) ? null : { mode: value?.mode, note: value?.note })
           setExpanded(new Set())
         } catch (err) {
-          setError(err.message)
+          if (seq === searchSeq.current) setError(err.message)
         } finally {
-          setSearching(false)
+          if (seq === searchSeq.current) setSearching(false)
         }
       }, [query, activeId])
 
@@ -812,7 +839,7 @@ window.__ModuleLoader__.load({
                 : collections.map((collection) => h('button', {
                     key: collection.id,
                     className: `kb-coll${collection.id === activeId ? ' kb-coll-on' : ''}`,
-                    onClick: () => setActiveId(collection.id),
+                    onClick: () => switchCollection(collection.id),
                     onContextMenu: (e) => { e.preventDefault(); removeCollection(collection.id, collection.name) },
                     title: `${collection.document_count} 份文档 · 右键删除`,
                   },
@@ -1075,7 +1102,14 @@ window.__ModuleLoader__.load({
           h('select', {
             className: 'kb-select',
             value: activeId ?? '',
-            onChange: (e) => { setActiveId(Number(e.target.value)); setHits(null) },
+            onChange: (e) => {
+              // 换库时把上一个库的查询与结果一起清掉
+              setActiveId(Number(e.target.value))
+              setHits(null)
+              setQuery('')
+              setExpanded(new Set())
+              setError(null)
+            },
             'aria-label': '选择知识库',
           },
             collections.length === 0

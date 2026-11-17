@@ -449,6 +449,40 @@ await test('维度一致性与语义检索（假服务端）', async () => {
   }
 })
 
+await test('切库清空检索状态（前端逻辑）', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // switchCollection 必须清空这几项，否则会显示上一个库的内容
+  const fn = src.match(/const switchCollection = useCallback\([\s\S]*?\}, \[activeId\]\)/)
+  if (!fn) throw new Error('找不到 switchCollection')
+
+  const body = fn[0]
+  const required = [
+    ['setHits(null)', '命中结果'],
+    ["setQuery('')", '查询词'],
+    ['setSearchMode(null)', '检索模式标记'],
+    ['setExpanded(new Set())', '展开状态'],
+    ['searchSeq.current++', '在途请求作废'],
+  ]
+  const missing = required.filter(([token]) => !body.includes(token))
+  if (missing.length) {
+    throw new Error(`switchCollection 缺少: ${missing.map(([, name]) => name).join('、')}`)
+  }
+
+  // 侧栏切库同样要清干净
+  const paneSelect = src.match(/onChange: \(e\) => \{[\s\S]*?setActiveId\(Number\(e\.target\.value\)\)[\s\S]*?\},/)
+  if (!paneSelect) throw new Error('找不到侧栏切库处理')
+  if (!paneSelect[0].includes('setHits(null)')) throw new Error('侧栏切库未清空命中')
+
+  // 删除文档后也应清空，避免悬空引用
+  const del = src.match(/const removeDocument = useCallback\([\s\S]*?\}, \[activeId/)
+  if (!del) throw new Error('找不到 removeDocument')
+  if (!del[0].includes('setHits(null)')) throw new Error('删文档后未清空命中')
+
+  ok('切库清空检索状态', `${required.length} 项状态均重置，含在途请求作废`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
