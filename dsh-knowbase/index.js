@@ -38,8 +38,8 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.4.0'
-const STAGE = 'P5'
+const VERSION = '0.5.0'
+const STAGE = 'UI'
 
 /** 单文件大小上限：50MB */
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -657,7 +657,7 @@ class KnowledgeBase {
       const sections = extracted.sections.filter((s) => s.text && s.text.trim())
       if (sections.length === 0) throw new Error('文档中没有可提取的文字')
 
-      const chunks = chunkSections(sections)
+      const chunks = chunkSections(sections, this.getChunkConfig(collectionId))
       if (chunks.length === 0) throw new Error('切块结果为空')
 
       await this.store.saveFile(sha256, ext, buffer)
@@ -702,7 +702,7 @@ class KnowledgeBase {
       const sections = extracted.sections.filter((s) => s.text && s.text.trim())
       if (sections.length === 0) throw new Error('文档中没有可提取的文字')
 
-      const chunks = chunkSections(sections)
+      const chunks = chunkSections(sections, this.getChunkConfig(doc.collection_id))
       this.store.replaceChunks(id, chunks)
       this.store.updateDocumentStatus(id, 'ready', {
         pageCount: extracted.meta?.pages ?? null,
@@ -1138,6 +1138,117 @@ class KnowledgeBase {
         // 重开失败留给下次启动兜底
       }
     }
+  }
+
+  /* ────────────────────── 切块与检索设置（库级）────────────────────── */
+
+  /**
+   * 读某个库的切块配置。
+   * 没单独设过就回落到全局默认——这样各库可以不同，但不必每个都填。
+   */
+  getChunkConfig(collectionId = null) {
+    const defaults = {
+      smart: true,
+      separator: '\n\n',
+      size: 1024 / 1.6,   // 界面按 token 显示，内部按字符算
+      overlap: 200 / 1.6,
+      minSize: 60,
+    }
+    if (collectionId === null || collectionId === undefined) return defaults
+
+    const stored = this.store.getSetting(`chunk.${collectionId}`, null)
+    if (!stored || typeof stored !== 'object') return defaults
+    return { ...defaults, ...stored }
+  }
+
+  /** 保存切块配置，值域在这里夹住 */
+  setChunkConfig(collectionId, patch = {}) {
+    if (collectionId === null || collectionId === undefined) {
+      throw new Error('必须指定知识库')
+    }
+    const current = this.getChunkConfig(collectionId)
+    const next = { ...current }
+
+    if (patch.smart !== undefined) next.smart = patch.smart === true
+
+    if (patch.separator !== undefined) {
+      const sep = String(patch.separator)
+      if (sep.trim() === '') throw new Error('分隔符不能为空')
+      next.separator = sep
+    }
+
+    if (patch.size !== undefined) {
+      const size = Number(patch.size)
+      if (!Number.isFinite(size)) throw new Error('分段大小必须是数字')
+      // 100–4000 字符；太小的块没有检索价值，太大的块稀释相似度
+      next.size = Math.min(4000, Math.max(100, size))
+    }
+
+    if (patch.overlap !== undefined) {
+      const overlap = Number(patch.overlap)
+      if (!Number.isFinite(overlap)) throw new Error('重叠大小必须是数字')
+      // 重叠不能超过块大小的一半，否则会无限自我覆盖
+      next.overlap = Math.min(next.size / 2, Math.max(0, overlap))
+    }
+
+    if (patch.minSize !== undefined) {
+      next.minSize = Math.min(500, Math.max(0, Number(patch.minSize) || 0))
+    }
+
+    this.store.setSetting(`chunk.${collectionId}`, next)
+    return next
+  }
+
+  /** 恢复默认切块配置 */
+  resetChunkConfig(collectionId) {
+    this.store.setSetting(`chunk.${collectionId}`, null)
+    return this.getChunkConfig(collectionId)
+  }
+
+  /** 读某个库的检索设置（当前只有 Top K） */
+  getSearchSettings(collectionId = null) {
+    const defaults = { topK: 6 }
+    if (collectionId === null || collectionId === undefined) return defaults
+    const stored = this.store.getSetting(`search.${collectionId}`, null)
+    if (!stored || typeof stored !== 'object') return defaults
+    return { ...defaults, ...stored }
+  }
+
+  /** 保存检索设置 */
+  setSearchSettings(collectionId, patch = {}) {
+    if (collectionId === null || collectionId === undefined) {
+      throw new Error('必须指定知识库')
+    }
+    const current = this.getSearchSettings(collectionId)
+    const next = { ...current }
+    if (patch.topK !== undefined) {
+      const topK = Number(patch.topK)
+      if (!Number.isFinite(topK)) throw new Error('Top K 必须是数字')
+      next.topK = Math.min(50, Math.max(1, Math.round(topK)))
+    }
+    this.store.setSetting(`search.${collectionId}`, next)
+    return next
+  }
+
+  /** 恢复默认检索设置 */
+  resetSearchSettings(collectionId) {
+    this.store.setSetting(`search.${collectionId}`, null)
+    return this.getSearchSettings(collectionId)
+  }
+
+  /**
+   * 笔记入库：用户直接写一段文字，不走文件上传。
+   * 内部按 .txt 处理，复用同一套抽取与切块流程。
+   */
+  async createNote({ collectionId, title, text }) {
+    const body = String(text ?? '').trim()
+    if (body === '') throw new Error('笔记内容不能为空')
+    const name = `${String(title ?? '').trim() || '未命名笔记'}.txt`
+    return this.importFile({
+      name,
+      buffer: Buffer.from(body, 'utf8'),
+      collectionId,
+    })
   }
 
   /* ────────────────────── 长任务 ────────────────────── */
@@ -1626,7 +1737,13 @@ class KnowledgeBase {
    * 语义检索：向量相似度 + 关键词，融合排序。
    * @returns {Promise<{ hits: Array, mode: 'hybrid'|'keyword', note?: string }>}
    */
-  async semanticSearch(query, { collectionId = null, limit = 10, useVector = true } = {}) {
+  async semanticSearch(query, { collectionId = null, limit = null, useVector = true } = {}) {
+    // 没显式给 limit 时，用该库配置的 Top K（默认 6）
+    if (limit === null || limit === undefined) {
+      limit = this.getSearchSettings(collectionId).topK
+    }
+    limit = Math.min(50, Math.max(1, Math.round(Number(limit) || 6)))
+
     const keywordHits = this.store.search(query, { collectionId, limit: limit * 3 })
 
     if (!useVector) return { hits: keywordHits.slice(0, limit), mode: 'keyword' }
@@ -2011,6 +2128,43 @@ export function apply(ctx, config) {
       })
     })
 
+    /* ── 切块设置 / 检索设置 / 笔记 ── */
+    route('/api/dsh-knowbase/chunk-config', (body) => {
+      const id = body.collectionId === undefined || body.collectionId === null
+        ? null
+        : Number(body.collectionId)
+      if (body.action === 'get') return json({ ok: true, value: kb.getChunkConfig(id) })
+      if (body.action === 'set') return json({ ok: true, value: kb.setChunkConfig(id, body.config ?? {}) })
+      if (body.action === 'reset') return json({ ok: true, value: kb.resetChunkConfig(id) })
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    route('/api/dsh-knowbase/search-settings', (body) => {
+      const id = body.collectionId === undefined || body.collectionId === null
+        ? null
+        : Number(body.collectionId)
+      if (body.action === 'get') return json({ ok: true, value: kb.getSearchSettings(id) })
+      if (body.action === 'set') return json({ ok: true, value: kb.setSearchSettings(id, body.settings ?? {}) })
+      if (body.action === 'reset') return json({ ok: true, value: kb.resetSearchSettings(id) })
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    route('/api/dsh-knowbase/note', async (body) => {
+      const id = body.collectionId === undefined || body.collectionId === null
+        ? null
+        : Number(body.collectionId)
+      const collection = id === null ? kb.ensureDefaultCollection() : kb.store.getCollection(id)
+      if (!collection) return fail('dsh-knowbase/no-collection', '目标知识库不存在')
+      return json({
+        ok: true,
+        value: await kb.createNote({
+          collectionId: collection.id,
+          title: body.title,
+          text: body.text,
+        }),
+      })
+    })
+
     /* ── OCR ── */
     route('/api/dsh-knowbase/ocr', async (body) => {
       if (body.action === 'get') {
@@ -2090,12 +2244,28 @@ export function apply(ctx, config) {
     })
 
     /* ── 抓取设置与权威来源清单 ── */
-    route('/api/dsh-knowbase/fetch', (body) => {
+    route('/api/dsh-knowbase/fetch', async (body) => {
       if (body.action === 'get') {
         return json({ ok: true, value: kb.getFetchConfig() })
       }
       if (body.action === 'set') {
         return json({ ok: true, value: kb.setFetchConfig(body.config ?? {}) })
+      }
+      /* 前端「链接」数据源走这里：抓一个 URL 并入库 */
+      if (body.action === 'url') {
+        const id = body.collectionId === undefined || body.collectionId === null
+          ? null
+          : Number(body.collectionId)
+        const collection = id === null ? kb.ensureDefaultCollection() : kb.store.getCollection(id)
+        if (!collection) return fail('dsh-knowbase/no-collection', '目标知识库不存在')
+        return json({
+          ok: true,
+          value: await kb.fetchSource({
+            url: String(body.url ?? ''),
+            collectionId: collection.id,
+            title: body.title ? String(body.title) : undefined,
+          }),
+        })
       }
       return fail('dsh-knowbase/bad-action', '未知操作')
     })

@@ -15,7 +15,28 @@ export const DEFAULT_CHUNK = Object.freeze({
   overlap: 80,
   /** 块的最小长度，低于此值并入上一块 */
   minSize: 60,
+  /**
+   * 段落分隔符。默认按空行切。
+   * 用户可以在设置里改成别的（比如单个换行、或自定义标记）。
+   */
+  separator: '\n\n',
+  /**
+   * 智能分段：识别标题与代码块，按语义边界聚合。
+   * 关掉就退化成「只按长度硬切」——更快、更可预测，但可能切在句子中间。
+   */
+  smart: true,
 })
+
+/** 把用户填的分隔符转成正则（支持 \n \t 等转义写法） */
+export function separatorToPattern(separator) {
+  const raw = String(separator ?? '').trim()
+  if (raw === '') return /\n{2,}/
+  // 允许用户直接写 \n\n 这种字面量
+  const unescaped = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+  // 转义正则特殊字符，避免用户填的符号被当成元字符
+  const escaped = unescaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(escaped, 'g')
+}
 
 const SENTENCE_END = /[。！？；.!?;]\s*|\n{2,}/
 
@@ -177,13 +198,18 @@ export function chunkSections(sections, options = {}) {
   const chunks = []
   let ord = 0
 
+  /** 段落切分规则：用户自定义的分隔符优先 */
+  const separatorPattern = separatorToPattern(config.separator)
+  /** 智能分段关闭时，不做标题/代码识别，纯按长度切 */
+  const smart = config.smart !== false
+
   /** 当前段落的上下文标题 */
   let currentHeading
 
   for (const section of sections) {
     if (!section?.text) continue
 
-    const paragraphs = section.text.split(/\n{2,}/)
+    const paragraphs = section.text.split(separatorPattern)
 
     /** 累积的代码行 */
     let codeBuffer = []
@@ -212,6 +238,22 @@ export function chunkSections(sections, options = {}) {
     for (const paragraph of paragraphs) {
       const trimmed = paragraph.trim()
       if (!trimmed) continue
+
+      // 智能分段关闭：直接按长度切，不做任何结构识别
+      if (!smart) {
+        for (const piece of splitParagraph(trimmed, config)) {
+          const text = piece.trim()
+          if (!text) continue
+          chunks.push({
+            ord: ord++,
+            text,
+            page: section.page,
+            tokens: Math.ceil(text.length / 1.6),
+            kind: 'text',
+          })
+        }
+        continue
+      }
 
       // 整段都是代码行 → 累积，稍后合并
       const lines = trimmed.split('\n')
@@ -248,7 +290,12 @@ export function chunkSections(sections, options = {}) {
     flushCode()
   }
 
-  return mergeTinyChunks(chunks, config)
+  /*
+   * 只有智能分段才做「碎块合并」。
+   * 用户关掉智能分段、或明确指定了分隔符，说明他要的是确定的边界，
+   * 这时再合并会把分隔符切开的结果又粘回去，等于设置失效。
+   */
+  return smart ? mergeTinyChunks(chunks, config) : chunks
 }
 
 /**

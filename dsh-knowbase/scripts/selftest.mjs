@@ -1080,6 +1080,259 @@ await test('设备测速接口', async () => {
   ok('设备测速接口', 'CPU/DML 各测一次，结论由实测数据算')
 })
 
+await test('切块配置与分隔符', async () => {
+  const { chunkSections, DEFAULT_CHUNK, separatorToPattern } = await import('../lib/chunk.js')
+
+  // 默认值
+  if (DEFAULT_CHUNK.smart !== true) throw new Error('smart 默认应为 true')
+  if (DEFAULT_CHUNK.separator !== '\n\n') throw new Error('默认分隔符不对')
+
+  const long = (s) => s.repeat(12)
+
+  // 自定义分隔符生效
+  const text = [long('甲段。'), long('乙段。'), long('丙段。')].join('\n---\n')
+  const bySep = chunkSections([{ text }], { separator: '---', smart: false })
+  if (bySep.length !== 3) throw new Error(`自定义分隔符切出 ${bySep.length} 块，应为 3`)
+
+  // 默认空行分隔
+  const byBlank = chunkSections([{ text: [long('一。'), long('二。')].join('\n\n') }], { smart: false })
+  if (byBlank.length !== 2) throw new Error(`空行分隔应切 2 块，实际 ${byBlank.length}`)
+
+  // smart=false 不合并、不识别代码
+  const code = ['public class A {', '  int x = 1;', '}'].join('\n\n')
+  const smartOn = chunkSections([{ text: code }], { smart: true })
+  const smartOff = chunkSections([{ text: code }], { smart: false })
+  if (smartOn.length !== 1) throw new Error('smart=true 应把代码合成 1 块')
+  if (smartOff.length <= 1) throw new Error('smart=false 不应合并')
+
+  // 分隔符转义：用户填 . 不该变成通配
+  const dotPattern = separatorToPattern('.')
+  if (dotPattern.source !== '\\.') throw new Error(`分隔符未转义：${dotPattern.source}`)
+
+  ok('切块配置与分隔符', 'smart 开关、自定义分隔符、转义均正确')
+})
+
+await test('库级配置与笔记入库', async () => {
+  const { KnowledgeStore } = await import('../lib/store.js')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const dir = mkdtempSync(join(tmpdir(), 'kb-cfg-'))
+  try {
+    const store = await new KnowledgeStore(dir).open()
+    const col = store.createCollection('配置测试')
+
+    // 库级设置存入 settings 表，键带库 id
+    store.setSetting(`chunk.${col.id}`, { smart: false, separator: '---', size: 300 })
+    const chunk = store.getSetting(`chunk.${col.id}`)
+    if (chunk.smart !== false) throw new Error('切块配置未持久化')
+    if (chunk.separator !== '---') throw new Error('分隔符未持久化')
+
+    store.setSetting(`search.${col.id}`, { topK: 9 })
+    const search = store.getSetting(`search.${col.id}`)
+    if (search.topK !== 9) throw new Error('Top K 未持久化')
+
+    // 不同库互不影响
+    const other = store.createCollection('另一个库')
+    if (store.getSetting(`chunk.${other.id}`, null) !== null) {
+      throw new Error('另一个库不该有配置')
+    }
+
+    store.close()
+
+    ok('库级配置与笔记入库', '切块与 Top K 按库隔离存取')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('值域夹紧与笔记校验', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 切块参数边界
+  if (!/Math\.min\(4000, Math\.max\(100, size\)\)/.test(host)) {
+    throw new Error('分段大小未夹到 100–4000')
+  }
+  if (!/Math\.min\(next\.size \/ 2, Math\.max\(0, overlap\)\)/.test(host)) {
+    throw new Error('重叠大小未限制为不超过块大小一半')
+  }
+  // Top K 边界
+  if (!/Math\.min\(50, Math\.max\(1, Math\.round\(topK\)\)\)/.test(host)) {
+    throw new Error('Top K 未夹到 1–50')
+  }
+  // 笔记空内容要拒绝
+  if (!host.includes("笔记内容不能为空")) throw new Error('笔记缺少空内容校验')
+  // 三个新路由都挂上
+  for (const path of ['chunk-config', 'search-settings', '/note']) {
+    if (!host.includes(path)) throw new Error(`缺少路由 ${path}`)
+  }
+
+  ok('值域夹紧与笔记校验', '切块/TopK 边界与空笔记校验齐备')
+})
+
+await test('服务商数据统一标准', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 三套 provider 数组都要存在
+  for (const name of ['EMBED_PROVIDERS', 'RERANK_PROVIDERS', 'OCR_PROVIDERS']) {
+    if (!src.includes(`const ${name} = [`)) throw new Error(`缺少 ${name}`)
+  }
+  // 旧的重排预设应已移除
+  if (src.includes('RERANK_PRESETS')) throw new Error('旧的 RERANK_PRESETS 未清理')
+
+  // 逐个解析 provider 块，检查字段完整性
+  function checkProviders(name) {
+    const start = src.indexOf(`const ${name} = [`)
+    if (start < 0) throw new Error(`找不到 ${name}`)
+    const end = src.indexOf('\n    ]', start)
+    const block = src.slice(start, end)
+
+    const ids = [...block.matchAll(/\n        id: '([^']+)',/g)].map((m) => m[1])
+    if (ids.length < 2) throw new Error(`${name} 服务商过少（${ids.length}）`)
+    if (!ids.includes('custom')) throw new Error(`${name} 缺少 custom 兜底`)
+
+    // 非 custom 必须有 baseUrl；模型清单为空时，必须在 hint 里说清原因
+    // （例如 DeepSeek 没有公开的嵌入接口，属于有意占位）
+    const entries = block.split(/\n      \{\n/).slice(1)
+    for (const entry of entries) {
+      const id = (entry.match(/id: '([^']+)'/) ?? [])[1]
+      if (!id) continue
+      if (id === 'custom') continue
+
+      if (!/baseUrl: 'https?:\/\//.test(entry)) {
+        throw new Error(`${name}/${id} 缺少 baseUrl`)
+      }
+      const hasModels = /models: \[[\s\S]*?id:/.test(entry)
+      if (!hasModels) {
+        const explained = /hint: '[^']*(未公开|不支持|暂无|占位|没有)[^']*'/.test(entry)
+        if (!explained) {
+          throw new Error(`${name}/${id} 没有模型，且 hint 未说明原因`)
+        }
+      }
+    }
+    return ids.length
+  }
+
+  const counts = {
+    embed: checkProviders('EMBED_PROVIDERS'),
+    rerank: checkProviders('RERANK_PROVIDERS'),
+    ocr: checkProviders('OCR_PROVIDERS'),
+  }
+
+  // 统一的选择器组件要被三处共用
+  if (!src.includes('function ProviderModelPicker')) throw new Error('缺少统一选择器')
+
+  ok('服务商数据统一标准', `嵌入 ${counts.embed} / 重排 ${counts.rerank} / OCR ${counts.ocr} 家，结构一致`)
+})
+
+await test('百炼重排的兼容性标注', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // gte-rerank-v2 不支持 OpenAI 兼容接口，必须在文案里说清楚，
+  // 否则用户填了必然报 model_not_supported
+  const dashscopeBlock = src.slice(
+    src.indexOf("id: 'dashscope',\n        label: '阿里云百炼 DashScope',\n        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',\n        keyUrl: 'https://bailian.console.aliyun.com/',\n        hint: '只有"),
+  )
+  if (!src.includes('gte-rerank-v2 需专用接口')) {
+    throw new Error('百炼重排缺少 gte-rerank-v2 不可用的说明')
+  }
+  if (!src.includes("id: 'qwen3-rerank'")) {
+    throw new Error('缺少 qwen3-rerank 模型项')
+  }
+  // 不能把不可用的 gte-rerank-v2 列进可选模型
+  if (/models: \[[^\]]*gte-rerank-v2/.test(src)) {
+    throw new Error('把不兼容的 gte-rerank-v2 列成了可选模型')
+  }
+
+  ok('百炼重排的兼容性标注', '只列 qwen3-rerank，并注明 gte-rerank-v2 不可用')
+})
+
+await test('多级页面结构', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 基础交互组件
+  for (const name of ['Drawer', 'Collapse', 'Slider', 'Tip', 'FieldLabel', 'ProviderModelPicker']) {
+    if (!src.includes(`function ${name}(`)) throw new Error(`缺少组件 ${name}`)
+  }
+
+  // 抽屉主体
+  for (const name of ['RecallPanel', 'SettingsBody']) {
+    if (!src.includes(`function ${name}(`)) throw new Error(`缺少抽屉主体 ${name}`)
+  }
+
+  // 主面板新结构：左栏 + 右侧纵向（顶栏/工具栏/内容）
+  if (!src.includes("className: 'kb-right'")) throw new Error('缺少右侧纵向容器')
+  if (!src.includes("className: 'kb-toolbar'")) throw new Error('缺少工具栏')
+  if (!src.includes("className: 'kb-header-actions'")) throw new Error('缺少顶栏图标区')
+
+  // 两个抽屉都要挂载
+  if (!src.includes('open: recallOpen')) throw new Error('召回测试抽屉未挂载')
+  if (!src.includes('open: settingsOpen')) throw new Error('设置抽屉未挂载')
+
+  // 空态四个按钮
+  if (!src.includes("className: 'kb-empty-actions'")) throw new Error('缺少空态按钮组')
+  for (const label of ['source.file', 'source.note', 'source.dir', 'source.link']) {
+    if (!src.includes(`t('${label}')`)) throw new Error(`空态缺少 ${label}`)
+  }
+
+  // 添加数据源菜单
+  if (!src.includes("sourceMenu === 'menu'")) throw new Error('缺少添加数据源菜单')
+  if (!src.includes("sourceMenu === 'note'")) throw new Error('缺少笔记表单')
+  if (!src.includes("sourceMenu === 'link'")) throw new Error('缺少链接表单')
+  if (!src.includes('webkitdirectory')) throw new Error('缺少目录选择')
+
+  // 拖放改成覆盖层，且事件挂在内容区
+  if (!src.includes('kb-drop-overlay')) throw new Error('缺少拖放覆盖层')
+  if (!/h\('main', \{\s*className: 'kb-content',\s*onDrop,/.test(src)) {
+    throw new Error('拖放事件没有挂在内容区（首次拖动会收不到）')
+  }
+
+  ok('多级页面结构', '抽屉/折叠/滑块/气泡 + 主面板三段式 + 四种数据源齐备')
+})
+
+await test('动效规范', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 抽屉滑入 280ms
+  if (!src.includes('transition: transform 280ms cubic-bezier')) {
+    throw new Error('抽屉缺少滑入过渡')
+  }
+  // 折叠用 grid-template-rows 做高度动画
+  if (!src.includes('grid-template-rows: 0fr')) throw new Error('折叠缺少高度动画')
+  // 按钮按下反馈
+  if (!src.includes('scale(0.92)') && !src.includes('scale(0.985)')) {
+    throw new Error('按钮缺少按下反馈')
+  }
+  // 气泡淡入
+  if (!src.includes('.kb-tip::after')) throw new Error('气泡缺少样式')
+  // 列表 stagger
+  if (!src.includes('animationDelay')) throw new Error('列表缺少逐个淡入')
+
+  // 必须尊重系统的「减少动态效果」
+  if (!src.includes('prefers-reduced-motion')) {
+    throw new Error('未处理 prefers-reduced-motion')
+  }
+
+  // 检查所有 transition 时长都在 90–300ms 之间（太慢会显得拖沓）
+  const durations = [...src.matchAll(/transition:[^;]*?(\d+)ms/g)].map((m) => Number(m[1]))
+  const tooSlow = durations.filter((d) => d > 300)
+  if (tooSlow.length > 0) {
+    throw new Error(`有过渡时长超过 300ms：${tooSlow.join(', ')}`)
+  }
+  const tooFast = durations.filter((d) => d < 80)
+  if (tooFast.length > 0) {
+    throw new Error(`有过渡时长低于 80ms（看不出效果）：${tooFast.join(', ')}`)
+  }
+
+  ok('动效规范', `${durations.length} 处过渡均在 90–300ms，且支持减少动态效果`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
