@@ -1310,7 +1310,7 @@ await test('动效规范', async () => {
     throw new Error('按钮缺少按下反馈')
   }
   // 气泡淡入
-  if (!src.includes('.kb-tip::after')) throw new Error('气泡缺少样式')
+  if (!src.includes('.kb-tip-bubble')) throw new Error('气泡缺少样式')
   // 列表 stagger
   if (!src.includes('animationDelay')) throw new Error('列表缺少逐个淡入')
 

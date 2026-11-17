@@ -914,7 +914,6 @@ window.__ModuleLoader__.load({
 
 /* ── 说明气泡 ── */
 .kb-tip {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -930,40 +929,37 @@ window.__ModuleLoader__.load({
   line-height: 1;
   cursor: help;
   vertical-align: middle;
-  transition: border-color 150ms ease, color 150ms ease;
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
 }
 .kb-tip:hover, .kb-tip:focus-visible {
   border-color: var(--dsw-alias-brand-primary);
   color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
   outline: none;
 }
-.kb-tip::after {
-  content: attr(data-tip);
+
+/*
+ * 气泡本体：由 TipProvider 渲染在 .kb-root 直接子级，
+ * 不在抽屉内部——否则会被抽屉的 overflow 裁掉。
+ */
+.kb-tip-bubble {
   position: absolute;
-  bottom: calc(100% + 7px);
-  right: -6px;
-  width: max-content;
-  max-width: 260px;
-  padding: 6px 9px;
-  border-radius: 7px;
+  z-index: 80;
+  padding: 7px 10px;
+  border-radius: 8px;
   background: var(--dsw-alias-label-primary);
   color: var(--dsw-alias-bg-base);
   font-size: 11px;
-  font-style: normal;
-  font-weight: 400;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: normal;
   text-align: left;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  transform: translateY(3px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
   pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease;
-  z-index: 60;
+  animation: kb-tip-in 140ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
-.kb-tip:hover::after, .kb-tip:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
+@keyframes kb-tip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ── 字段标签排版 ── */
@@ -1191,9 +1187,15 @@ window.__ModuleLoader__.load({
 
 @media (prefers-reduced-motion: reduce) {
   .kb-fade-in { animation: none; }
+  .kb-tip-bubble { animation: none; }
   .kb-spin { animation: none; }
   .kb-drop { transition: none; }
   .kb-drop-on { transform: none; }
+  .kb-drawer,
+  .kb-drawer-mask,
+  .kb-collapse-body,
+  .kb-collapse-arrow,
+  .kb-collapse-inner { transition: none !important; }
 }
 
 /* ── 图标：一律按传入尺寸固定，绝不撑满父容器 ── */
@@ -1768,6 +1770,8 @@ window.__ModuleLoader__.load({
 
       const fileInputRef = useRef(null)
       const dirInputRef = useRef(null)
+      /** 气泡定位基准：整个插件面板 */
+      const rootRef = useRef(null)
       const searchSeq = useRef(0)
 
       /* ── 刷新 ── */
@@ -2038,7 +2042,8 @@ window.__ModuleLoader__.load({
 
       /* ══════════════════════════ 渲染 ══════════════════════════ */
 
-      return h('div', { className: 'kb-root' },
+      return h('div', { className: 'kb-root', ref: rootRef },
+        h(TipProvider, { rootRef },
 
         /* 主区：左侧库列表占满高度，右侧自上而下是顶栏 / 工具栏 / 内容 */
         h('div', { className: 'kb-main' },
@@ -2431,6 +2436,7 @@ window.__ModuleLoader__.load({
             refreshDocuments(activeId)
           },
         })),
+        ),
       )
     }
 
@@ -4674,22 +4680,102 @@ window.__ModuleLoader__.load({
 
     /* ══════════════════════════ 基础交互组件 ══════════════════════════ */
 
+    /* ══════════════════════════ 字段说明气泡 ══════════════════════════ */
+
     /**
-     * 字段说明气泡（截图里 Top K 旁边那个 ⓘ）。
+     * 气泡通信上下文。
      *
-     * 用纯 CSS 的 ::after 实现：不依赖 DSH 的 tooltip 原语（没有暴露），
-     * 也不再叠一层 portal。气泡贴在图标正上方居中。
+     * 为什么不用 CSS ::after 直接画：
+     *   气泡在抽屉内部时会被 .kb-drawer-body 的 overflow 裁掉，
+     *   往左延伸还会跑出面板。所以气泡必须渲染到抽屉外面（kb-root 直接子级），
+     *   由顶层的 TipProvider 统一绘制，坐标用相对 kb-root 的位置。
      */
+    const TipContext = React.createContext
+      ? React.createContext(null)
+      : null
+
+    /** 提供气泡渲染层，并给出显示/隐藏入口 */
+    function TipProvider({ rootRef, children }) {
+      const [tip, setTip] = useState(null)
+
+      const value = useMemo(() => ({
+        show(element, text) {
+          if (!element || !text) return
+          const root = rootRef.current?.getBoundingClientRect()
+          if (!root) return
+          const rect = element.getBoundingClientRect()
+          setTip({
+            text,
+            // 统一换算成相对 kb-root 的坐标
+            left: rect.left - root.left,
+            top: rect.top - root.top,
+            rootWidth: root.width,
+          })
+        },
+        hide() {
+          setTip(null)
+        },
+      }), [rootRef])
+
+      return h(TipContext.Provider, { value },
+        children,
+        tip ? h(TipBubble, tip) : null,
+      )
+    }
+
+    /**
+     * 气泡本体：水平方向自动避让，垂直方向空间不够就翻到上方。
+     * 这样无论 ⓘ 在左边、右边还是抽屉里，都不会被裁。
+     */
+    function TipBubble({ text, left, top, rootWidth }) {
+      const width = Math.max(140, Math.min(280, rootWidth - 24))
+
+      // 水平：默认从图标左边缘开始，右边放不下就往左挪，仍不行就贴边
+      let x = left - 4
+      if (x + width > rootWidth - 12) x = rootWidth - 12 - width
+      if (x < 12) x = 12
+
+      /*
+       * 垂直：靠近顶部时向下弹，其余情况向上弹。
+       * 只有「上方空间不足」才需要翻开——用固定阈值 100px 判断，
+       * 因为气泡自身高度未知（最长三行约 70px）。
+       */
+      const below = top < 100
+      const style = {
+        left: `${x}px`,
+        width: `${width}px`,
+        top: below ? `${top + 22}px` : `${top - 6}px`,
+        transform: below ? 'none' : 'translateY(-100%)',
+      }
+
+      return h('div', { className: 'kb-tip-bubble', style, role: 'tooltip' }, text)
+    }
+
+    /** ⓘ 图标：悬停/聚焦时让 Provider 画气泡 */
     function Tip({ text }) {
+      const context = TipContext && React.useContext ? React.useContext(TipContext) : null
+      const ref = useRef(null)
       if (!text) return null
+
+      const show = () => context?.show(ref.current, text)
+      const hide = () => context?.hide()
+
       return h('span', {
+        ref,
         className: 'kb-tip',
-        'data-tip': text,
         tabIndex: 0,
         role: 'img',
         'aria-label': text,
+        // 没有气泡层时退回浏览器原生提示，至少不会什么都看不到
+        title: context ? undefined : text,
+        onMouseEnter: show,
+        onMouseLeave: hide,
+        onFocus: show,
+        onBlur: hide,
       }, 'i')
     }
+
+    /* ══════════════════════════ 气泡结束 ══════════════════════════ */
 
     /**
      * 带动画的一行标签 + 说明。
