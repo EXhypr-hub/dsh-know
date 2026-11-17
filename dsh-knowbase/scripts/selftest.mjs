@@ -1509,45 +1509,65 @@ await test('磁盘选择器接线', async () => {
   ok('磁盘选择器接线', '后端探测+缓存、前端渲染+子目录建议均已接通')
 })
 
-await test('版本适配：宿主能力探测', async () => {
-  const { detectHostCapabilities, describeHostCapabilities } = await import('../lib/compat.js')
+await test('版本适配：核心探测与可选服务分层', async () => {
+  const { checkCore, checkServices, describeCapabilities } = await import('../lib/compat.js')
 
-  const makeCtx = (services) => ({
-    effect() {},
-    inject() {},
-    get(name) { return services[name] },
-  })
+  /*
+   * 这里守的是一个真实事故：
+   * 早期版本在 apply() 开头用 ctx.get('connection') 判断路由能力，
+   * 但 Cordis 服务是异步就绪的，apply 时 ctx.get() 返回 undefined，
+   * 探测判定「不兼容」→ apply 直接 return → 工具和路由全没注册。
+   * 插件列表里显示 active，一用就「请求失败」。
+   *
+   * 所以现在必须分层：core 同步可靠，services 只能在 inject 里看，
+   * 且 services 永远不能用来阻止注册。
+   */
 
-  // 完整宿主
-  const full = detectHostCapabilities(makeCtx({
+  // ① 核心方法齐全
+  const coreOk = checkCore({ effect() {}, inject() {} })
+  if (!coreOk.available) throw new Error('effect/inject 都在，却判成不可用')
+
+  // ② 核心方法缺失才算不可用
+  const coreBad = checkCore({})
+  if (coreBad.available) throw new Error('空 ctx 却判成可用')
+  if (!coreBad.missing.includes('ctx.effect')) throw new Error('没指出缺 ctx.effect')
+
+  // ③ 关键：apply 阶段 ctx.get 拿不到服务时，不能有「服务探测」这回事
+  //    旧实现 detectHostCapabilities(ctx) 在这种情况下会返回 usable=false
+  const earlyCtx = { effect() {}, inject() {}, get() { return undefined } }
+  const earlyCore = checkCore(earlyCtx)
+  if (!earlyCore.available) {
+    throw new Error('服务未就绪时核心探测判成了不可用——这会让插件什么都不注册')
+  }
+
+  // ④ 服务探测只在 inject 回调里做，且能识别齐全与缺失
+  const fullScope = {
+    get: (n) => ({
+      connection: { fetch: { register() {} } },
+      tools: { register() {} },
+      skills: { register() {} },
+      credentials: {},
+    }[n]),
     connection: { fetch: { register() {} } },
     tools: { register() {} },
     skills: { register() {} },
     credentials: {},
-  }))
-  if (!full.usable) throw new Error('完整宿主被判成不可用')
-  if (full.missing.length !== 0) throw new Error(`完整宿主不该有缺失：${full.missing.join(',')}`)
+  }
+  const full = checkServices(fullScope)
+  if (!full.routes || !full.tools || !full.skills) throw new Error('服务齐全却探测失败')
 
-  // 老版本：没有 tools/skills/credentials，但仍应可用
-  const partial = detectHostCapabilities(makeCtx({
-    connection: { fetch: { register() {} } },
-  }))
-  if (!partial.usable) throw new Error('缺可选能力不该判成不可用')
-  const partialNote = describeHostCapabilities(partial)
-  if (!/可选能力/.test(partialNote)) throw new Error('诊断没提到缺失的是可选能力')
+  const partial = checkServices({ get: () => undefined })
+  if (partial.routes || partial.tools) throw new Error('空作用域却探测成有服务')
 
-  // 缺关键 API：必须判成不可用，且诊断点名
-  const broken = detectHostCapabilities(makeCtx({}))
-  if (broken.usable) throw new Error('缺 connection.fetch 却判成可用')
-  const brokenNote = describeHostCapabilities(broken)
-  if (!/connection\.fetch\.register/.test(brokenNote)) throw new Error('诊断没点名缺失的关键 API')
-  if (/工具、技能/.test(brokenNote)) throw new Error('把可选能力误报成关键缺失')
+  // ⑤ 诊断文案：未确认服务时不能妄称「不兼容」
+  const pending = describeCapabilities(coreOk)
+  if (/不兼容|请升级/.test(pending)) {
+    throw new Error(`服务未确认时不该报升级：${pending}`)
+  }
+  const missingRoutes = describeCapabilities(coreOk, { routes: false, tools: true })
+  if (!/前端接口不可用/.test(missingRoutes)) throw new Error('缺前端接口却没提示')
 
-  // 空 ctx 不能崩
-  const empty = detectHostCapabilities({})
-  if (empty.usable) throw new Error('空 ctx 被判成可用')
-
-  ok('版本适配：宿主能力探测', '完整/精简/缺失/空 四种情形判定正确')
+  ok('版本适配：核心探测与可选服务分层', 'apply 阶段只查核心方法，服务缺失不会阻止注册')
 })
 
 await test('版本适配：客户端降级', async () => {
@@ -1576,9 +1596,15 @@ await test('版本适配：客户端降级', async () => {
   if (pkg.dsh?.compatibility !== undefined) {
     throw new Error('无效字段 dsh.compatibility 未清理')
   }
-  // Host 侧要探测并暴露诊断
-  if (!host.includes('detectHostCapabilities')) throw new Error('Host 没有接能力探测')
-  if (!/compatibility: \{/.test(host)) throw new Error('status 没有暴露兼容信息')
+  // Host 侧要探测并暴露诊断；且必须是分层探测（不能拿服务判断能否注册）
+  if (!host.includes('checkCore(ctx)')) throw new Error('Host 没有接核心探测')
+  if (!host.includes('checkServices(scope)')) throw new Error('Host 没在 inject 里探测服务')
+  if (host.includes('if (!caps.usable)')) {
+    throw new Error('仍在使用会提前 return 的旧探测，这会让插件什么都不注册')
+  }
+  if (!/compatibility:/.test(host)) throw new Error('status 没有暴露兼容信息')
+  // 服务探测必须是实时的，不能缓存 apply 时的结果
+  if (!host.includes('probeServices()')) throw new Error('缺少实时的服务探测')
 
   ok('版本适配：客户端降级', 'engines.dsh 已声明，slot 缺失时早退，无无效字段')
 })

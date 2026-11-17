@@ -1,86 +1,100 @@
 /**
  * 宿主能力探测。
  *
- * 为什么要这个：
- *   插件要支持 DSH 的多个版本（当前声明 >=0.1.7-rc.2）。
- *   与其猜版本号，不如直接检查要用的 API 在不在——
- *   缺失就走降级路径，而不是让整个插件抛错。
+ * ⚠️ 这里踩过一个坑，留作教训：
+ *   最初在 apply() 开头用 ctx.get('connection') 判断路由能力，
+ *   但 Cordis 的服务是**异步就绪**的——apply 执行时 ctx.get() 往往还返回
+ *   undefined。结果探测判定「版本不兼容」，apply 直接 return，
+ *   工具和路由一个都没注册。插件在列表里显示 active，一用就「请求失败」。
  *
- * 依据：DSH 安装目录自带的 docs/upgrade-guide/ 里，
- *   从 v0.1.7-rc.2 到 v0.2.2-rc.1 的 213 条破坏性变更中，
- *   没有一条涉及本插件用到的 slots / connection.fetch / tools / skills / locale。
- *   这份探测是防御性的：万一将来变了，降级而不是崩。
+ * 所以现在分两层：
+ *   core     —— ctx.effect / ctx.inject 这类 Cordis 核心方法，apply 时一定有，
+ *               可以用它决定「要不要继续」；
+ *   deferred —— connection / tools / skills 这类服务，apply 时不可靠，
+ *               只能在 ctx.inject 回调里确认，且**永远不用于阻止注册**。
+ *
+ * 探测的用途是「诊断」，不是「拦截」。
  */
 
 /**
- * 探测 Host 侧能力。
- * @param {object} ctx 插件上下文
- * @returns {{ slot: boolean, tools: boolean, skills: boolean, routes: boolean, credentials: boolean, missing: string[] }}
+ * 检查 Cordis 核心方法。
+ * 这两个缺失说明插件系统本身有问题，任何插件都跑不起来。
+ * @param {object} ctx
  */
-export function detectHostCapabilities(ctx) {
+export function checkCore(ctx) {
   const missing = []
-
-  const hasEffect = typeof ctx?.effect === 'function'
-  if (!hasEffect) missing.push('ctx.effect')
-
-  const hasInject = typeof ctx?.inject === 'function'
-  if (!hasInject) missing.push('ctx.inject')
-
-  // connection.fetch.register 是前端所有 API 的唯一入口，缺失时插件等于不可用
-  const connection = typeof ctx?.get === 'function' ? ctx.get('connection') : undefined
-  const routes = typeof connection?.fetch?.register === 'function'
-  if (!routes) missing.push('connection.fetch.register')
-
-  const tools = typeof ctx?.get === 'function'
-    && typeof ctx.get('tools')?.register === 'function'
-  if (!tools) missing.push('tools.register')
-
-  const skills = typeof ctx?.get === 'function'
-    && typeof ctx.get('skills')?.register === 'function'
-  if (!skills) missing.push('skills.register')
-
-  // 凭据是可选增强：没有它就用「存本地」的降级路径
-  const credentials = typeof ctx?.get === 'function'
-    && ctx.get('credentials') !== undefined
-
+  if (typeof ctx?.effect !== 'function') missing.push('ctx.effect')
+  if (typeof ctx?.inject !== 'function') missing.push('ctx.inject')
   return {
-    effect: hasEffect,
-    inject: hasInject,
-    routes,
-    tools,
-    skills,
-    credentials,
+    available: missing.length === 0,
     missing,
-    /**
-     * 能不能提供最基本的服务。
-     * 没有路由注册能力就完全没法用；effect/inject 缺失则生命周期不可靠。
-     */
-    usable: hasEffect && hasInject && routes,
   }
 }
 
 /**
- * 生成一句人看的诊断，写进状态和日志。
- *
- * 区分「必需」和「可选」：缺 tools/skills/credentials 只是少几个能力，
- * 缺 effect/inject/connection.fetch 才是真的不能用。
- * @param {ReturnType<typeof detectHostCapabilities>} caps
+ * 检查可选服务。**只能在 ctx.inject 回调里调用**，
+ * 那时服务已经就绪，结果才可信。
+ * @param {object} scope 注入后的作用域
  */
-export function describeHostCapabilities(caps) {
-  const CRITICAL = ['ctx.effect', 'ctx.inject', 'connection.fetch.register']
-  const criticalMissing = CRITICAL.filter((name) => caps.missing.includes(name))
-
-  if (criticalMissing.length > 0) {
-    return `当前 DSH 版本缺少必要的插件 API：${criticalMissing.join('、')}。`
-      + '请升级 DeepSeek Harness 后重试。'
+export function checkServices(scope) {
+  const has = (name, path) => {
+    try {
+      let value = scope
+      for (const key of path) value = value?.[key]
+      return typeof value === 'function'
+    } catch {
+      return false
+    }
   }
 
-  const lost = []
-  if (!caps.tools) lost.push('智能体工具')
-  if (!caps.skills) lost.push('技能')
-  if (!caps.credentials) lost.push('凭据库')
+  return {
+    // connection.fetch.register 是前端所有 API 的唯一入口
+    routes: has('connection', ['connection', 'fetch', 'register']),
+    tools: has('tools', ['tools', 'register']),
+    skills: has('skills', ['skills', 'register']),
+    credentials: (() => {
+      try {
+        return scope?.credentials !== undefined
+      } catch {
+        return false
+      }
+    })(),
+  }
+}
 
-  const base = '宿主 API 完整'
-  if (lost.length === 0) return `${base}（检索、导入、工具、技能、凭据库均可用）`
-  return `${base}，但当前版本缺少可选能力：${lost.join('、')}；检索与导入不受影响。`
+/**
+ * 生成给人看的诊断。
+ * @param {{ available: boolean, missing: string[] }} core
+ * @param {{ routes?: boolean, tools?: boolean, skills?: boolean, credentials?: boolean }} [services]
+ */
+export function describeCapabilities(core, services) {
+  if (!core.available) {
+    return `当前 DSH 缺少 Cordis 核心方法：${core.missing.join('、')}。`
+      + '这不是插件能处理的，请重新安装 DeepSeek Harness。'
+  }
+
+  if (!services) {
+    // 服务还没确认，不要妄下结论
+    return 'Cordis 核心方法齐全，可选服务待连接后确认。'
+  }
+
+  const ok = []
+  if (services.routes) ok.push('前端接口')
+  if (services.tools) ok.push('智能体工具')
+  if (services.skills) ok.push('技能')
+  if (services.credentials) ok.push('凭据库')
+
+  const lost = []
+  if (!services.routes) lost.push('前端接口')
+  if (!services.tools) lost.push('智能体工具')
+  if (!services.skills) lost.push('技能')
+  if (!services.credentials) lost.push('凭据库')
+
+  if (lost.length === 0) {
+    return `宿主 API 完整（${ok.join('、')}均可用）`
+  }
+  if (!services.routes) {
+    return `前端接口不可用，界面无法工作；其余能力：${ok.join('、') || '无'}`
+  }
+  return `宿主 API 基本可用，缺少：${lost.join('、')}`
 }

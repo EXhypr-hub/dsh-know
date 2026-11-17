@@ -25,7 +25,7 @@ import { applyRerank } from './lib/rerank.js'
 import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
 import { sha256Of } from './lib/models.js'
-import { detectHostCapabilities, describeHostCapabilities } from './lib/compat.js'
+import { checkCore, describeCapabilities } from './lib/compat.js'
 import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
@@ -271,8 +271,11 @@ class KnowledgeBase {
     this.drivesCache = null
     /** 向量缓存：key = collectionId|modelId，值已反序列化成 Float32Array */
     this.vectorCache = new Map()
-    /** 宿主能力探测结果（版本适配用） */
-    this.hostCapabilities = null
+    /** Cordis 核心方法探测结果（apply 时确定，同步可靠） */
+    this.compatCore = null
+    /** 可选服务探测结果（inject 回调里确定，可能一直为 null） */
+    this.compatServices = null
+    /** 给人看的兼容性诊断 */
     this.capabilityNote = ''
     this.apiKeyCache = ''
     this.embedderCache = null
@@ -542,12 +545,17 @@ class KnowledgeBase {
     }
     return {
       version: VERSION,
-      // 版本适配：让界面和日志能看到宿主 API 是否齐全
-      compatibility: {
-        usable: this.hostCapabilities?.usable !== false,
-        note: this.capabilityNote || undefined,
-        missing: this.hostCapabilities?.missing ?? [],
-      },
+      // 版本适配：实时探测服务，不依赖 apply 时的缓存
+      compatibility: (() => {
+        this.refreshCapabilityNote()
+        const core = this.compatCore ?? { available: true, missing: [] }
+        return {
+          usable: core.available !== false,
+          note: this.capabilityNote || undefined,
+          missing: core.missing ?? [],
+          services: this.probeServices(),
+        }
+      })(),
       stage: STAGE,
       ready: this.ready,
       readyError: this.readyError,
@@ -1627,6 +1635,50 @@ this.store.deleteDocument(id)
     }
   }
 
+  /* ────────────────────── 兼容性诊断 ────────────────────── */
+
+  /**
+   * 实时读取可选服务是否可用。
+   *
+   * 为什么要实时查而不是 apply 时缓存：
+   *   apply 阶段服务是异步就绪的，ctx.get() 往往拿不到；
+   *   而每个 inject 回调的 scope 又只含自己声明的那几个服务。
+   *   只有在真正要用的时候（比如 status 请求），所有服务才都就绪。
+   */
+  probeServices() {
+    const has = (name) => {
+      try {
+        const svc = this.ctx?.get?.(name)
+        if (name === 'connection') return typeof svc?.fetch?.register === 'function'
+        return typeof svc?.register === 'function' || (name === 'credentials' && svc !== undefined)
+      } catch {
+        return false
+      }
+    }
+    return {
+      routes: has('connection'),
+      tools: has('tools'),
+      skills: has('skills'),
+      credentials: (() => {
+        try {
+          return this.ctx?.get?.('credentials') !== undefined
+        } catch {
+          return false
+        }
+      })(),
+    }
+  }
+
+  /** 重新生成给人看的诊断串 */
+  refreshCapabilityNote() {
+    const core = this.compatCore ?? { available: true, missing: [] }
+    if (!core.available) {
+      this.capabilityNote = describeCapabilities(core)
+      return
+    }
+    this.capabilityNote = describeCapabilities(core, this.probeServices())
+  }
+
   /* ────────────────────── 磁盘探测 ────────────────────── */
 
   /**
@@ -2059,17 +2111,22 @@ export function apply(ctx, config) {
   const kb = new KnowledgeBase(ctx, config ?? {})
 
   /*
-   * 版本适配：先探测宿主能力，再决定注册哪些东西。
+   * 版本适配：只检查 Cordis 核心方法。
    *
-   * 不猜版本号——直接看 API 在不在。缺关键 API 时记录明确诊断，
-   * 而不是抛异常让整个插件加载失败（那样用户只会看到一句看不懂的报错）。
+   * 教训：曾经在这里用 ctx.get('connection') 探测服务能力，
+   * 但服务是异步就绪的，apply 时往往还是 undefined，
+   * 结果被误判成「版本不兼容」直接 return，工具和路由全部没注册。
+   * 插件列表里显示 active，一用就「请求失败」。
+   *
+   * 所以这里只查 ctx.effect / ctx.inject 这两个核心方法——
+   * 它们在 apply 阶段一定存在。可选服务留到 inject 回调里再确认，
+   * 而且**永远不用来阻止注册**。
    */
-  const caps = detectHostCapabilities(ctx)
-  kb.hostCapabilities = caps
-  kb.capabilityNote = describeHostCapabilities(caps)
+  const core = checkCore(ctx)
+  kb.compatCore = core
+  kb.capabilityNote = describeCapabilities(core)
 
-  if (!caps.usable) {
-    // 关键 API 缺失：不注册路由，但把原因留在状态里供界面/日志读取
+  if (!core.available) {
     try {
       ctx.logger?.error?.('dsh-knowbase: %s', kb.capabilityNote)
     } catch {
@@ -2108,8 +2165,25 @@ export function apply(ctx, config) {
   })
 
   ctx.inject(['connection'], (scope) => {
+    /*
+     * 诊断：这里只确认「前端接口」这一项。
+     *
+     * 不能在这里 checkServices(scope)——这个 scope 只注入了 connection，
+     * tools / skills 根本不在里面，会把已注册成功的能力误报成缺失。
+     * 最终的服务状态在 status 里实时探测。
+     */
+    kb.compatServices = { ...(kb.compatServices ?? {}), routes: scope.get('connection')?.fetch?.register !== undefined }
+    kb.refreshCapabilityNote()
+
     const connection = scope.get('connection')
-    if (connection?.fetch?.register === undefined) return
+    if (connection?.fetch?.register === undefined) {
+      try {
+        ctx.logger?.warn?.('dsh-knowbase: %s', kb.capabilityNote)
+      } catch {
+        // 静默
+      }
+      return
+    }
 
     const disposers = []
 
