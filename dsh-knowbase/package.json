@@ -1,0 +1,44 @@
+{
+  "name": "dsh-knowbase",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH 本地知识库插件：文档导入、语义检索、权威来源采集",
+  "type": "module",
+  "license": "MIT",
+  "author": "EXhypr-hub",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EXhypr-hub/dsh-know.git"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.2-rc.1+": "compatible"
+      }
+    }
+  }
+}

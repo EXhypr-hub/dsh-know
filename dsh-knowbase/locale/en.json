@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "title": "Local knowledge base",
+    "description": "Build a knowledge base from your own documents. Drop in PDF, Word, PowerPoint and Excel files, or let the agent collect material from authoritative sources. Answers come back with the passage, the document name and the page number, and every file stays on this computer."
+  },
+  "panel": {
+    "title": "Local knowledge base",
+    "subtitle": "Document import · semantic search · authoritative sources",
+    "emptyTitle": "No knowledge base yet",
+    "emptyHint": "Dragging files and searching arrive as the plugin is built (currently P0: skeleton).",
+    "runtime": "Runtime",
+    "progress": "Progress",
+    "version": "Version",
+    "dataRoot": "Data directory",
+    "status": "Status",
+    "ready": "Directory writable, waiting for import",
+    "connecting": "Connecting…",
+    "notReady": "Not ready",
+    "current": "In progress",
+    "pending": "Pending"
+  },
+  "sidebar": {
+    "label": "Knowledge"
+  }
+}

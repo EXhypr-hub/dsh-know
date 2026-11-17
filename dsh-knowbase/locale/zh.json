@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "title": "本地知识库",
+    "description": "用你自己的文档建立知识库。把 PDF、Word、PPT、Excel 拖进来，或让智能体从权威来源采集资料。回答时给出原文片段、文档名和页码，所有文件都留在本机。"
+  },
+  "panel": {
+    "title": "本地知识库",
+    "subtitle": "文档导入 · 语义检索 · 权威来源采集",
+    "emptyTitle": "还没有知识库",
+    "emptyHint": "拖入文件与检索能力正在开发中（当前 P0：插件骨架）。",
+    "runtime": "运行时",
+    "progress": "开发进度",
+    "version": "版本",
+    "dataRoot": "数据目录",
+    "status": "状态",
+    "ready": "目录可写，等待导入功能",
+    "connecting": "连接中…",
+    "notReady": "未就绪",
+    "current": "进行中",
+    "pending": "待做"
+  },
+  "sidebar": {
+    "label": "知识库"
+  }
+}
