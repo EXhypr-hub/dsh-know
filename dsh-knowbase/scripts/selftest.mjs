@@ -571,6 +571,102 @@ await test('本地模型目录管理', async () => {
   ok('本地模型目录管理', `${ids.length} 个模型，缺失统计与错误处理正确`)
 })
 
+await test('依赖安装链路', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 后端：三条必备环节
+  const checks = [
+    ['findNpm', 'npm 定位'],
+    ['/api/dsh-knowbase/models/install-lib', '安装路由'],
+    ['/api/dsh-knowbase/models/install-progress', '进度路由'],
+    ['spawn(', '子进程调用'],
+    ["'/c', npm", 'Windows cmd 包装'],
+  ]
+  const missing = checks.filter(([token]) => !host.includes(token))
+  if (missing.length) throw new Error(`后端缺少: ${missing.map(([, n]) => n).join('、')}`)
+
+  // 不能用 shell:true（会触发参数拼接告警）
+  if (/spawn\([^)]*shell:\s*true/.test(host)) throw new Error('不应使用 shell:true')
+
+  // 前端：一键按钮 + 轮询
+  if (!client.includes('一键安装依赖')) throw new Error('前端缺一键安装按钮')
+  if (!client.includes('models/install-progress')) throw new Error('前端缺进度轮询')
+
+  ok('依赖安装链路', '5 个环节齐备，未使用 shell:true')
+})
+
+await test('本地模型缓存位置', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../lib/embed-local.js', import.meta.url), 'utf8')
+
+  /*
+   * transformers 默认把模型缓存在 node_modules 里，
+   * 重装依赖会丢模型。必须显式改到数据目录。
+   */
+  if (!src.includes('env.cacheDir')) {
+    throw new Error('未设置 env.cacheDir，模型会下到 node_modules 里')
+  }
+  if (!src.includes('hf-cache')) {
+    throw new Error('cacheDir 未指向数据目录')
+  }
+
+  // 镜像必须走 env.remoteHost（环境变量方式实测无效）
+  if (!src.includes('env.remoteHost')) {
+    throw new Error('未设置 env.remoteHost，镜像不会生效')
+  }
+  if (/process\.env\.HF_ENDPOINT\s*=/.test(src)) {
+    throw new Error('不应依赖 HF_ENDPOINT 环境变量（实测 import 后无效）')
+  }
+
+  // 下载器与推理器的路径衔接：下载过的模型要能被直接加载，而不是重下
+  if (!src.includes('resolveSource')) {
+    throw new Error('缺少 resolveSource，下载过的模型不会被复用')
+  }
+  if (!src.includes('MODEL_CATALOG')) {
+    throw new Error('未引用 MODEL_CATALOG，无法把 modelId 映射到仓库名')
+  }
+
+  ok('本地模型缓存位置', 'cacheDir 指向数据目录，镜像走 env.remoteHost，下载与推理路径已衔接')
+})
+
+await test('智能体工具与技能', async () => {
+  const { readFileSync } = await import('node:fs')
+  const toolsSrc = readFileSync(new URL('../lib/tools.js', import.meta.url), 'utf8')
+  const skillSrc = readFileSync(new URL('../lib/skill.js', import.meta.url), 'utf8')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 计划书 12.3 要求的五个工具
+  const required = ['kb_list', 'kb_search', 'kb_ingest', 'kb_source_fetch', 'kb_job']
+  const missing = required.filter((name) => !toolsSrc.includes(`name: '${name}'`))
+  if (missing.length) throw new Error(`缺少工具: ${missing.join('、')}`)
+
+  // 每个工具都要有输出声明与执行体，否则注册会失败
+  const registered = (toolsSrc.match(/register\(\{/g) ?? []).length
+  if (registered < required.length) throw new Error(`注册数量不足: ${registered}`)
+
+  // 关键：工具结果必须是无损 JSON，undefined 会导致校验失败
+  if (!toolsSrc.includes('function clean(')) {
+    throw new Error('缺少 clean()，undefined 字段会让工具结果校验失败')
+  }
+
+  // 不依赖 DSH 内部包（插件不在其模块解析上下文里）
+  if (/from '@deepseek-ai\//.test(toolsSrc)) {
+    throw new Error('不应 import @deepseek-ai 内部包（会 ERR_MODULE_NOT_FOUND）')
+  }
+
+  // 技能
+  if (!skillSrc.includes("SKILL_NAME = 'knowledge-base'")) throw new Error('技能名不对')
+  if (!skillSrc.includes('kb_search')) throw new Error('技能未指导模型使用 kb_search')
+
+  // 注册点
+  if (!host.includes("ctx.inject(['tools']")) throw new Error('未注册工具')
+  if (!host.includes("ctx.inject(['skills']")) throw new Error('未注册技能')
+
+  ok('智能体工具与技能', `${required.length} 个工具 + knowledge-base 技能，结果已做 JSON 清洗`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

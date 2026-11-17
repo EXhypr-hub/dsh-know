@@ -11,14 +11,19 @@
  */
 
 import { homedir } from 'node:os'
-import { join, extname } from 'node:path'
+import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, unlink } from 'node:fs/promises'
+import { readFile, writeFile, unlink, stat, readdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 
 import { KnowledgeStore, titleFromFilename } from './lib/store.js'
 import { extractDocument, isSupportedExtension, unsupportedReason } from './lib/extract.js'
 import { chunkSections } from './lib/chunk.js'
 import { applyRerank } from './lib/rerank.js'
+import { registerTools } from './lib/tools.js'
+import { buildSkill } from './lib/skill.js'
 import {
   createEmbedder,
   cosine,
@@ -55,14 +60,97 @@ function credentialKey(scope, id) {
   return `${scope}/${id}`
 }
 
-/** 本地推理依赖是否可用（只探测，不加载） */
-async function localLibraryAvailable() {
+/** 内网 / 回环 / 保留地址判断，供抓取时拒绝 */
+function isPrivateHost(hostname) {
+  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === '') return true
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
+  if (host === '::1' || host === '::') return true
+
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])]
+    if (a === 10) return true
+    if (a === 127) return true
+    if (a === 0) return true
+    if (a === 169 && b === 254) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 100 && b >= 64 && b <= 127) return true
+    return false
+  }
+
+  // IPv6 唯一本地地址与链路本地
+  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true
+  return false
+}
+
+/** 递归收集目录下的可导入文件 */
+async function collectFiles(dir, depth = 0) {
+  if (depth > 8) return []
+  const out = []
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      out.push(...(await collectFiles(full, depth + 1)))
+    } else if (entry.isFile() && isSupportedExtension(extname(entry.name))) {
+      out.push(full)
+    }
+  }
+  return out
+}
+
+/** 本地推理依赖是否可用（只探测，不加载） */async function localLibraryAvailable() {
   try {
     await import('@huggingface/transformers')
     return true
   } catch {
     return false
   }
+}
+
+/** 插件自身的目录（用于在其下执行 npm install / 查找 node_modules） */
+function packageDir() {
+  return dirname(fileURLToPath(import.meta.url))
+}
+
+/**
+ * 找一个可用的 npm 可执行文件。
+ *
+ * 本机实测：在 MSYS bash 里直接敲 `npm` 会 exit 126，必须用完整路径。
+ * DSH 的 Host 进程里 process.execPath 可能指向 Electron 而不是 node，
+ * 所以优先扫描 PATH，而不是只看 node 同目录。
+ */
+function findNpm() {
+  const isWin = process.platform === 'win32'
+  const names = isWin ? ['npm.cmd', 'npm.exe', 'npm'] : ['npm']
+  const sep = isWin ? ';' : ':'
+
+  const dirs = String(process.env.PATH ?? '')
+    .split(sep)
+    .map((d) => d.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
+
+  for (const dir of dirs) {
+    for (const name of names) {
+      try {
+        const candidate = join(dir, name)
+        if (existsSync(candidate)) return candidate
+      } catch {
+        // 忽略非法路径项，继续找
+      }
+    }
+  }
+
+  // 最后兜底：交给 shell 解析 PATH
+  return isWin ? 'npm.cmd' : 'npm'
 }
 
 function fail(code, message, status = 400) {
@@ -95,6 +183,178 @@ class KnowledgeBase {
       this.ready = false
       this.readyError = error instanceof Error ? error.message : String(error)
     }
+  }
+
+  /**
+   * 批量导入文件或目录（供 kb_ingest 工具使用）。
+   * @param {{ paths: string[], collectionId: number, sessionId?: string|null, cwd?: string }} input
+   */
+  async ingestPaths({ paths, collectionId, cwd }) {
+    const baseDir = cwd || this.lastCwd || process.cwd()
+    const results = []
+
+    for (const raw of paths) {
+      const target = isAbsolute(raw) ? raw : resolve(baseDir, raw)
+      try {
+        const info = await stat(target)
+        if (info.isDirectory()) {
+          const files = await collectFiles(target)
+          for (const file of files) {
+            results.push(await this.#ingestOne(file, collectionId))
+          }
+        } else if (info.isFile()) {
+          results.push(await this.#ingestOne(target, collectionId))
+        } else {
+          results.push({ path: target, ok: false, error: '既不是文件也不是目录' })
+        }
+      } catch (error) {
+        results.push({
+          path: target,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    return results
+  }
+
+  /** 内部：导入单个文件路径 */
+  async #ingestOne(filePath, collectionId) {
+    try {
+      const info = await stat(filePath)
+      if (info.size > MAX_FILE_BYTES) {
+        return {
+          path: filePath,
+          ok: false,
+          error: `文件过大（${Math.round(info.size / 1024 / 1024)}MB）`,
+        }
+      }
+      const buffer = await readFile(filePath)
+      const outcome = await this.importFile({
+        name: basename(filePath),
+        buffer,
+        collectionId,
+      })
+      return {
+        path: filePath,
+        ok: true,
+        documentId: outcome.documentId,
+        chunkCount: outcome.chunkCount ?? 0,
+        duplicate: outcome.duplicate === true,
+        scanned: outcome.scanned === true,
+      }
+    } catch (error) {
+      return {
+        path: filePath,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /**
+   * 抓取一个网址并存库（供 kb_source_fetch 工具使用）。
+   *
+   * 安全约束（计划书 5.3）：
+   *   - 只允许 http/https
+   *   - 拒绝内网地址，防止被诱导探测局域网
+   *   - 体积上限
+   *   - 记录来源 URL 与抓取时间
+   */
+  async fetchSource({ url, collectionId, title }) {
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      throw new Error('网址格式不正确')
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('只支持 http/https 网址')
+    }
+    if (isPrivateHost(parsed.hostname)) {
+      throw new Error(`拒绝访问内网地址：${parsed.hostname}`)
+    }
+
+    let response
+    try {
+      response = await fetch(parsed.href, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000),
+        headers: {
+          'user-agent': 'dsh-knowbase/0.3 (+local knowledge base)',
+          accept: 'text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5',
+        },
+      })
+    } catch (error) {
+      throw new Error(`抓取失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    if (!response.ok) {
+      const hint = response.status === 401 || response.status === 403
+        ? '（可能需要登录，插件不会绕过）'
+        : response.status === 404 ? '（页面不存在）' : ''
+      throw new Error(`抓取失败：HTTP ${response.status}${hint}`)
+    }
+
+    const declared = Number(response.headers.get('content-length') ?? 0)
+    if (declared > MAX_FILE_BYTES) {
+      throw new Error(`文件过大（${Math.round(declared / 1024 / 1024)}MB），上限 ${MAX_FILE_BYTES / 1024 / 1024}MB`)
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length === 0) throw new Error('抓到的内容为空')
+    if (buffer.length > MAX_FILE_BYTES) throw new Error('内容超过体积上限')
+
+    const contentType = String(response.headers.get('content-type') ?? '').toLowerCase()
+    const name = this.#nameForFetched(parsed, contentType, title)
+
+    const outcome = await this.importFile({
+      name,
+      buffer,
+      collectionId,
+    })
+
+    // 来源留痕：抓来的文档必须能追溯
+    if (outcome.documentId) {
+      this.store.setDocumentSource(outcome.documentId, {
+        sourceUrl: parsed.href,
+        fetchedAt: Date.now(),
+      })
+    }
+
+    return {
+      documentId: outcome.documentId,
+      title: title || name,
+      url: parsed.href,
+      contentType: contentType || 'unknown',
+      bytes: buffer.length,
+      chunkCount: outcome.chunkCount ?? 0,
+      duplicate: outcome.duplicate === true,
+      scanned: outcome.scanned === true,
+    }
+  }
+
+  /** 根据 content-type 与网址推断一个带扩展名的文件名 */
+  #nameForFetched(parsed, contentType, title) {
+    const fromUrl = basename(parsed.pathname || '')
+    const hasExt = /\.[a-z0-9]{2,5}$/i.test(fromUrl)
+
+    let ext = 'html'
+    if (contentType.includes('pdf')) ext = 'pdf'
+    else if (contentType.includes('wordprocessingml')) ext = 'docx'
+    else if (contentType.includes('spreadsheetml')) ext = 'xlsx'
+    else if (contentType.includes('presentationml')) ext = 'pptx'
+    else if (contentType.includes('markdown')) ext = 'md'
+    else if (contentType.includes('text/plain')) ext = 'txt'
+    else if (hasExt) ext = fromUrl.split('.').pop().toLowerCase()
+
+    const stem = (title || fromUrl || parsed.hostname || 'page')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.[a-z0-9]{2,5}$/i, '')
+      .slice(0, 120) || 'page'
+
+    return `${stem}.${ext}`
   }
 
   stop() {
@@ -130,6 +390,34 @@ class KnowledgeBase {
   /** 列出所有知识库 */
   listCollections() {
     return this.store.listCollections()
+  }
+
+  /** 确保存在至少一个库，返回第一个 */
+  ensureDefaultCollection() {
+    return this.store.ensureDefaultCollection()
+  }
+
+  /**
+   * 按名称或 id 找知识库。
+   * 工具调用里模型可能给名字、也可能给数字 id，这里都接受。
+   */
+  resolveCollection(nameOrId) {
+    const raw = nameOrId === null || nameOrId === undefined ? '' : String(nameOrId).trim()
+    if (raw === '') return null
+
+    const list = this.store.listCollections()
+
+    // 纯数字按 id 匹配
+    if (/^\d+$/.test(raw)) {
+      const byId = list.find((c) => c.id === Number(raw))
+      if (byId) return byId
+    }
+
+    // 精确名 → 忽略大小写 → 包含
+    return list.find((c) => c.name === raw)
+      ?? list.find((c) => c.name.toLowerCase() === raw.toLowerCase())
+      ?? list.find((c) => c.name.includes(raw) || raw.includes(c.name))
+      ?? null
   }
 
   createCollection(name, description) {
@@ -677,6 +965,30 @@ export function apply(ctx, config) {
     return () => kb.stop()
   }, 'dsh-knowbase: lifecycle')
 
+  /* ── 智能体工具：让模型能自己查库、导入、抓资料 ── */
+  ctx.inject(['tools'], (scope) => {
+    const tools = scope.get('tools')
+    if (tools?.register === undefined) return undefined
+    try {
+      return registerTools(scope, kb)
+    } catch (error) {
+      scope.logger?.warn?.('dsh-knowbase: 工具注册失败 %s', error instanceof Error ? error.message : String(error))
+      return undefined
+    }
+  })
+
+  /* ── 技能：教模型什么时候查库、怎么建专题库 ── */
+  ctx.inject(['skills'], (scope) => {
+    const skills = scope.get('skills')
+    if (skills?.register === undefined) return undefined
+    try {
+      return skills.register(buildSkill())
+    } catch (error) {
+      scope.logger?.warn?.('dsh-knowbase: 技能注册失败 %s', error instanceof Error ? error.message : String(error))
+      return undefined
+    }
+  })
+
   ctx.inject(['connection'], (scope) => {
     const connection = scope.get('connection')
     if (connection?.fetch?.register === undefined) return
@@ -853,6 +1165,96 @@ export function apply(ctx, config) {
 
     route('/api/dsh-knowbase/models/progress', () =>
       json({ ok: true, value: kb.downloadProgress ?? null }))
+
+    /* ── 一键安装本地推理依赖 ── */
+    route('/api/dsh-knowbase/models/install-lib', async () => {
+      if (kb.installState?.running) {
+        return json({ ok: true, value: { started: false, reason: '已经在安装了' } })
+      }
+      if (await localLibraryAvailable()) {
+        return json({ ok: true, value: { started: false, reason: '依赖已安装' } })
+      }
+
+      const npm = findNpm()
+      const cwd = packageDir()
+      /*
+       * 依赖默认已随插件预装（见 package.json 的 dependencies）。
+       * 这条一键安装是兜底：node_modules 被误删或换机器拷贝源码后用它恢复。
+       * 不带包名安装，按 package.json 的版本装全部依赖。
+       */
+      const args = ['install', '--no-audit', '--no-fund']
+
+      kb.installState = {
+        running: true,
+        startedAt: Date.now(),
+        lines: [`准备执行：${npm} ${args.join(' ')}`, `工作目录：${cwd}`],
+        error: null,
+      }
+
+      // 后台执行，路由立即返回；前端轮询进度
+      // Windows 上 .cmd 需要经由 cmd.exe 调用；不用 shell:true 以避免参数拼接告警
+      const child = process.platform === 'win32'
+        ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', npm, ...args], {
+            cwd,
+            windowsHide: true,
+            env: { ...process.env, npm_config_yes: 'true' },
+          })
+        : spawn(npm, args, {
+            cwd,
+            windowsHide: true,
+            env: { ...process.env, npm_config_yes: 'true' },
+          })
+
+      const push = (text) => {
+        if (!text) return
+        for (const line of String(text).split(/\r?\n/)) {
+          const trimmed = line.trim()
+          if (trimmed) kb.installState.lines.push(trimmed.slice(0, 500))
+        }
+        // 只保留最近 200 行，避免无限增长
+        if (kb.installState.lines.length > 200) {
+          kb.installState.lines = kb.installState.lines.slice(-200)
+        }
+      }
+
+      child.stdout?.on('data', (buf) => push(buf.toString('utf8')))
+      child.stderr?.on('data', (buf) => push(buf.toString('utf8')))
+
+      child.on('error', (error) => {
+        kb.installState.running = false
+        kb.installState.error = `无法启动 npm：${error.message}`
+      })
+
+      child.on('close', async (code) => {
+        kb.installState.running = false
+        kb.installState.exitCode = code
+        // 装完立即探测，确认是否真的可用
+        kb.installState.available = await localLibraryAvailable()
+        if (code !== 0 && !kb.installState.error) {
+          kb.installState.error = `npm 退出码 ${code}`
+        }
+      })
+
+      return json({ ok: true, value: { started: true, npm, cwd } })
+    })
+
+    route('/api/dsh-knowbase/models/install-progress', async () => {
+      const state = kb.installState
+      if (!state) {
+        return json({ ok: true, value: { running: false, available: await localLibraryAvailable(), lines: [] } })
+      }
+      return json({
+        ok: true,
+        value: {
+          running: state.running,
+          available: state.available ?? (state.running ? null : await localLibraryAvailable()),
+          error: state.error,
+          exitCode: state.exitCode,
+          lines: state.lines.slice(-40),
+          elapsedMs: Date.now() - state.startedAt,
+        },
+      })
+    })
 
     /* ── 重排设置 ── */
     route('/api/dsh-knowbase/rerank', async (body) => {

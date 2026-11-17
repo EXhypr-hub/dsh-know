@@ -10,6 +10,7 @@
  */
 
 import { join } from 'node:path'
+import { MODEL_CATALOG, inspectLocalModel } from './models.js'
 
 /** 镜像到 env.remoteHost 的映射 */
 const MIRROR_HOSTS = {
@@ -61,6 +62,26 @@ export class LocalEmbedder {
     }
   }
 
+  /**
+   * 解析模型加载来源。
+   *
+   * 关键：下载器把文件放在 models/<modelId>/，而 transformers 自己下载时
+   * 用的是仓库名（如 BAAI/bge-m3）。不识别这个差异的话，
+   * 用户明明下载过模型，插件还会再从镜像拉一遍。
+   */
+  async resolveSource() {
+    if (this.modelDir) return this.modelDir
+
+    if (this.modelId && this.modelsDir) {
+      const info = await inspectLocalModel(this.modelsDir, this.modelId)
+      if (info.complete) return info.dir
+    }
+
+    const spec = MODEL_CATALOG[this.modelId]
+    // 已知模型用仓库名；未知的当作仓库名直接用
+    return spec?.repo ?? this.modelId
+  }
+
   /** 首次使用时加载模型 */
   async ensurePipeline(onProgress) {
     if (this.pipeline) return this.pipeline
@@ -78,8 +99,22 @@ export class LocalEmbedder {
       env.allowRemoteModels = true
       env.allowLocalModels = true
 
-      // 优先用本地目录（下载器已把文件放好），否则交给库自己去镜像拉
-      const source = this.modelDir || this.modelId
+      /*
+       * 重要：transformers 默认把模型缓存在
+       * node_modules/@huggingface/transformers/.cache/ 里。
+       * 那意味着重装依赖会丢模型，而且数据不在用户指定的目录。
+       * 显式指到数据目录下的 models/hf-cache。
+       */
+      if (this.modelsDir) {
+        env.cacheDir = join(this.modelsDir, 'hf-cache')
+      }
+      env.useFSCache = true
+
+      // 决定从哪里加载模型：
+      //   1. 用户手动指定的目录
+      //   2. 下载器已经下好的 models/<id>
+      //   3. 否则用 catalog 里的仓库名，交给镜像现拉
+      const source = await this.resolveSource()
 
       const extractor = await pipeline('feature-extraction', source, {
         quantized: true,

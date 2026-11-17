@@ -433,7 +433,7 @@ window.__ModuleLoader__.load({
 .kb-model-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
 .kb-model-actions { flex: none; display: flex; gap: 5px; }
 
-/* ── 代码片段 ── */
+/* ── 代码片段 / 安装日志 ── */
 .kb-code {
   display: block;
   margin-top: 6px;
@@ -448,6 +448,28 @@ window.__ModuleLoader__.load({
   word-break: break-all;
   user-select: all;
 }
+.kb-code-log {
+  max-height: 130px;
+  overflow-y: auto;
+  user-select: text;
+  opacity: 0.85;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.kb-install-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  margin-bottom: 6px;
+}
+.kb-details { margin-top: 8px; font-size: 11.5px; }
+.kb-details summary {
+  cursor: pointer;
+  color: var(--dsw-alias-label-secondary);
+  user-select: none;
+}
+.kb-details summary:hover { color: var(--dsw-alias-label-primary); }
 
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -1750,6 +1772,9 @@ window.__ModuleLoader__.load({
       const [mirrors, setMirrors] = useState([])
       const [libAvailable, setLibAvailable] = useState(true)
       const [installHint, setInstallHint] = useState('')
+      const [installing, setInstalling] = useState(false)
+      const [installLog, setInstallLog] = useState([])
+      const [installError, setInstallError] = useState(null)
       const [busy, setBusy] = useState('')
       const [progress, setProgress] = useState(null)
       const [message, setMessage] = useState(null)
@@ -1782,6 +1807,56 @@ window.__ModuleLoader__.load({
         }, 800)
         return () => clearInterval(timer)
       }, [busy])
+
+      /* 安装依赖：启动后轮询进度 */
+      const installLibrary = useCallback(async () => {
+        setInstalling(true)
+        setInstallError(null)
+        setInstallLog(['正在启动安装…'])
+        try {
+          const started = await api('models/install-lib')
+          if (!started.started) {
+            setInstallLog([started.reason ?? '无需安装'])
+            if (started.reason === '依赖已安装') {
+              setLibAvailable(true)
+              setInstalling(false)
+            }
+            return
+          }
+        } catch (err) {
+          setInstallError(err.message)
+          setInstalling(false)
+        }
+      }, [])
+
+      useEffect(() => {
+        if (!installing) return undefined
+        let alive = true
+        const timer = setInterval(async () => {
+          if (!alive) return
+          try {
+            const p = await api('models/install-progress')
+            setInstallLog(p.lines?.length ? p.lines : ['（等待输出…）'])
+            if (p.error) setInstallError(p.error)
+            if (!p.running) {
+              alive = false
+              clearInterval(timer)
+              setInstalling(false)
+              if (p.available) {
+                setLibAvailable(true)
+                setMessage({ kind: 'ok', text: '依赖安装完成，现在可以使用本地模型了' })
+              } else if (p.error) {
+                setInstallError(p.error)
+              } else {
+                setInstallError('安装结束，但依赖仍不可用')
+              }
+            }
+          } catch {
+            // 单次轮询失败不终止
+          }
+        }, 1000)
+        return () => { alive = false; clearInterval(timer) }
+      }, [installing])
 
       const isInstalled = (id) => installed.some((m) => m.id === id && m.complete)
 
@@ -1817,15 +1892,40 @@ window.__ModuleLoader__.load({
 
       return h('div', null,
 
-        /* 依赖未安装时的明确指引，避免用户点了才失败 */
+        /* 依赖未安装：给一键安装，而不是只给命令 */
         libAvailable
           ? null
           : h('div', { className: 'kb-notice kb-notice-err' },
               h('div', { style: { fontWeight: 600, marginBottom: 4 } }, '本地推理依赖未安装'),
-              h('div', null, '下面可以先把模型下载到本地；但要用它计算向量，需要先安装依赖：'),
-              h('code', { className: 'kb-code' }, installHint || 'npm install @huggingface/transformers'),
-              h('div', { style: { marginTop: 6 } },
-                '如果暂时不想折腾，把「嵌入方式」切回「API」即可——已验证可用。'),
+              h('div', null, '要用本地模型算向量，需要先装一个推理库（约 473MB）。'),
+
+              installing
+                ? h('div', { style: { marginTop: 8 } },
+                    h('div', { className: 'kb-install-status' },
+                      h('span', { className: 'kb-spin' }, '◐'),
+                      h('span', null, '正在安装，可能需要 1–3 分钟…'),
+                    ),
+                    h('pre', { className: 'kb-code kb-code-log' },
+                      installLog.slice(-12).join('\n') || '（等待输出…）'),
+                  )
+                : h('div', { style: { marginTop: 8 } },
+                    h('button', {
+                      className: 'kb-btn kb-btn-primary kb-btn-sm',
+                      onClick: installLibrary,
+                    }, '一键安装依赖'),
+
+                    installError
+                      ? h('div', { className: 'kb-err', style: { marginTop: 6 } },
+                          `安装失败：${installError}`)
+                      : null,
+
+                    h('details', { className: 'kb-details' },
+                      h('summary', null, '安装失败时的手动方式'),
+                      h('code', { className: 'kb-code' }, installHint || 'npm install @huggingface/transformers'),
+                      h('div', { className: 'kb-field-hint', style: { marginTop: 4 } },
+                        '在插件目录执行上述命令。也可以把「嵌入方式」切回「API」——已验证可用。'),
+                    ),
+                  ),
             ),
 
         message

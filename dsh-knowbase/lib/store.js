@@ -226,6 +226,15 @@ export class KnowledgeStore {
     `).run(status, error, pageCount, chunkCount, Date.now(), id)
   }
 
+  /** 记录文档的来源与抓取时间（抓来的资料必须可追溯） */
+  setDocumentSource(id, { sourceUrl, license = null, fetchedAt = Date.now() }) {
+    this.db.prepare(`
+      UPDATE documents
+      SET source_url = ?, license = COALESCE(?, license), fetched_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(sourceUrl, license, fetchedAt, Date.now(), id)
+  }
+
   deleteDocument(id) {
     this.db.prepare('DELETE FROM documents WHERE id = ?').run(id)
   }
