@@ -146,42 +146,25 @@ export class ApiEmbedder {
   }
 }
 
-/* ────────────────────────── Provider：本地模型（占位，P3 实现）────────────────────────── */
-
-export class LocalEmbedder {
-  constructor(config) {
-    this.modelDir = config.modelDir ?? ''
-    this.dimension = 0
-  }
-
-  get id() {
-    return modelIdOf('local', this.modelDir || 'none', this.dimension)
-  }
-
-  get label() {
-    return this.modelDir ? `本地模型` : '本地模型（未配置）'
-  }
-
-  async test() {
-    throw new Error('本地模型支持将在 P3 提供。现在请先在设置里接入嵌入 API。')
-  }
-
-  async embed() {
-    throw new Error('本地模型支持将在 P3 提供。现在请先在设置里接入嵌入 API。')
-  }
-}
-
-/* ────────────────────────── 工厂 ────────────────────────── */
+/* ────────────────────────── Provider 工厂 ────────────────────────── */
 
 /**
  * 依据配置创建 embedder。
+ * 本地实现拆在 embed-local.js，这里用动态 import 按需加载，
+ * 这样没装 transformers 依赖时插件仍可正常启动。
+ *
  * @param {{ provider: string, api: object, local: object }} config
  */
-export function createEmbedder(config) {
+export async function createEmbedder(config) {
   const provider = config?.provider ?? 'none'
 
   if (provider === 'api') return new ApiEmbedder(config.api ?? {})
-  if (provider === 'local') return new LocalEmbedder(config.local ?? {})
+
+  if (provider === 'local') {
+    // 动态加载，避免没装 transformers 时影响插件启动
+    const { LocalEmbedder } = await import('./embed-local.js')
+    return new LocalEmbedder(config.local ?? {})
+  }
 
   return null
 }

@@ -411,6 +411,44 @@ window.__ModuleLoader__.load({
 }
 .kb-mode-ok { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent); }
 
+/* ── 本地模型列表 ── */
+.kb-model-list { display: flex; flex-direction: column; gap: 6px; }
+.kb-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.kb-model:hover { background: var(--dsw-alias-bg-layer-2); }
+.kb-model-on {
+  border-color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, var(--dsw-alias-bg-layer-1));
+}
+.kb-model-main { flex: 1; min-width: 0; }
+.kb-model-name { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; }
+.kb-model-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
+.kb-model-actions { flex: none; display: flex; gap: 5px; }
+
+/* ── 代码片段 ── */
+.kb-code {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l1);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .kb-fade-in { animation: kb-fade-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
@@ -1031,6 +1069,18 @@ window.__ModuleLoader__.load({
                       onChanged: () => { refreshStatus(); refreshDocuments(activeId) },
                     }),
                   ),
+
+                  /* 重排设置 */
+                  h('section', { className: 'kb-section' },
+                    h('div', { className: 'kb-section-head' },
+                      h('h2', { className: 'kb-section-title' }, '重排设置'),
+                      h('span', { className: 'kb-section-meta' }, '从候选里精排，提高相关性（可选）'),
+                    ),
+                    h(RerankPanel, {
+                      collectionId: activeId,
+                      onChanged: () => refreshStatus(),
+                    }),
+                  ),
                 ),
           ),
         ),
@@ -1519,9 +1569,21 @@ window.__ModuleLoader__.load({
           },
             h('option', { value: 'none' }, '不使用（仅关键词检索）'),
             h('option', { value: 'api' }, 'API / 本地服务（OpenAI 兼容）'),
-            h('option', { value: 'local' }, '本地模型文件（P3 提供）'),
+            h('option', { value: 'local' }, '本地模型（需先下载）'),
           ),
         ),
+
+        /* ── 本地模型选择 ── */
+        config.provider === 'local'
+          ? h(React.Fragment, null,
+              h(LocalModelPicker, {
+                collectionId,
+                config,
+                patchLocal,
+                onChanged,
+              }),
+            )
+          : null,
 
         config.provider === 'api'
           ? h(React.Fragment, null,
@@ -1679,6 +1741,353 @@ window.__ModuleLoader__.load({
           '换嵌入模型后向量维度会变，旧索引不能混用，需要重新点「建立向量索引」。'),
       )
     }
+
+    /* ══════════════════════════ 本地模型选择器 ══════════════════════════ */
+
+    function LocalModelPicker({ collectionId, config, patchLocal, onChanged }) {
+      const [catalog, setCatalog] = useState([])
+      const [installed, setInstalled] = useState([])
+      const [mirrors, setMirrors] = useState([])
+      const [libAvailable, setLibAvailable] = useState(true)
+      const [installHint, setInstallHint] = useState('')
+      const [busy, setBusy] = useState('')
+      const [progress, setProgress] = useState(null)
+      const [message, setMessage] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          const value = await api('models', { action: 'catalog' })
+          setCatalog(value.catalog ?? [])
+          setInstalled(value.local ?? [])
+          setMirrors(value.mirrors ?? [])
+          setLibAvailable(value.libAvailable !== false)
+          setInstallHint(value.installHint ?? '')
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      /* 下载期间轮询进度 */
+      useEffect(() => {
+        if (busy !== 'download') return undefined
+        const timer = setInterval(async () => {
+          try {
+            const p = await api('models/progress')
+            if (p) setProgress(p)
+          } catch {
+            // 忽略单次轮询失败
+          }
+        }, 800)
+        return () => clearInterval(timer)
+      }, [busy])
+
+      const isInstalled = (id) => installed.some((m) => m.id === id && m.complete)
+
+      const download = useCallback(async (id) => {
+        setBusy('download')
+        setMessage(null)
+        setProgress({ done: 0, total: 1, detail: '准备中…' })
+        try {
+          await api('models/download', { modelId: id })
+          setMessage({ kind: 'ok', text: '下载完成' })
+          await load()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+          setProgress(null)
+        }
+      }, [load])
+
+      const remove = useCallback(async (id) => {
+        if (!window.confirm('删除这个本地模型？')) return
+        setBusy('remove')
+        try {
+          await api('models', { action: 'remove', modelId: id })
+          await load()
+          setMessage({ kind: 'ok', text: '已删除' })
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [load])
+
+      return h('div', null,
+
+        /* 依赖未安装时的明确指引，避免用户点了才失败 */
+        libAvailable
+          ? null
+          : h('div', { className: 'kb-notice kb-notice-err' },
+              h('div', { style: { fontWeight: 600, marginBottom: 4 } }, '本地推理依赖未安装'),
+              h('div', null, '下面可以先把模型下载到本地；但要用它计算向量，需要先安装依赖：'),
+              h('code', { className: 'kb-code' }, installHint || 'npm install @huggingface/transformers'),
+              h('div', { style: { marginTop: 6 } },
+                '如果暂时不想折腾，把「嵌入方式」切回「API」即可——已验证可用。'),
+            ),
+
+        message
+          ? h('div', { className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''}` }, message.text)
+          : null,
+
+        /* 镜像选择 */
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '下载镜像'),
+          h('select', {
+            className: 'kb-select',
+            value: config.local.mirror ?? 'hf-mirror',
+            onChange: (e) => patchLocal({ mirror: e.target.value }),
+          },
+            (mirrors.length ? mirrors : [{ id: 'hf-mirror', label: 'HF 镜像（国内快）' }])
+              .map((m) => h('option', { key: m.id, value: m.id }, m.label)),
+          ),
+          h('div', { className: 'kb-field-hint' },
+            '国内直连 huggingface.co 经常失败，建议保持 HF 镜像。'),
+        ),
+
+        /* 模型列表 */
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '本地模型'),
+          h('div', { className: 'kb-model-list' },
+            catalog.map((m) => {
+              const done = isInstalled(m.id)
+              const selected = config.local.modelId === m.id
+              return h('div', {
+                key: m.id,
+                className: `kb-model${selected ? ' kb-model-on' : ''}`,
+              },
+                h('div', { className: 'kb-model-main' },
+                  h('div', { className: 'kb-model-name' },
+                    m.name,
+                    done
+                      ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 6 } }, '已下载')
+                      : null,
+                  ),
+                  h('div', { className: 'kb-model-sub' },
+                    `${m.dim} 维 · 约 ${m.sizeMB >= 1000 ? (m.sizeMB / 1000).toFixed(1) + 'GB' : m.sizeMB + 'MB'} · ${m.note}`),
+                ),
+                h('div', { className: 'kb-model-actions' },
+                  done
+                    ? h(React.Fragment, null,
+                        h('button', {
+                          className: 'kb-btn kb-btn-sm',
+                          disabled: busy !== '',
+                          onClick: () => {
+                            patchLocal({ modelId: m.id, dimension: m.dim })
+                            onChanged?.()
+                          },
+                        }, selected ? '已选中' : '选用'),
+                        h('button', {
+                          className: 'kb-btn kb-btn-sm kb-btn-danger',
+                          disabled: busy !== '',
+                          onClick: () => remove(m.id),
+                        }, '删除'),
+                      )
+                    : h('button', {
+                        className: 'kb-btn kb-btn-sm kb-btn-primary',
+                        disabled: busy !== '',
+                        onClick: () => download(m.id),
+                      }, '下载'),
+                ),
+              )
+            }),
+          ),
+        ),
+
+        progress
+          ? h('div', { className: 'kb-notice' },
+              `下载中 ${progress.done}/${progress.total} · ${progress.detail ?? ''}`)
+          : null,
+
+        /* 手动指定目录 */
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '或手动指定模型目录'),
+          h('input', {
+            className: 'kb-input',
+            placeholder: '例如 D:\\models\\bge-m3',
+            value: config.local.modelDir ?? '',
+            onChange: (e) => patchLocal({ modelDir: e.target.value }),
+          }),
+          h('div', { className: 'kb-field-hint' },
+            '已有 transformers 格式模型时可直接填路径，支持 ONNX。留空则用上面选中的模型。'),
+        ),
+      )
+    }
+
+    /* ══════════════════════════ 本地模型选择器结束 ══════════════════════════ */
+
+    /* ══════════════════════════ 重排设置 ══════════════════════════ */
+
+    /** 常见重排模型，选了自动填地址 */
+    const RERANK_PRESETS = [
+      { id: 'custom', label: '自定义…', baseUrl: '', model: '' },
+      { id: 'siliconflow', label: '硅基流动 SiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-reranker-v2-m3' },
+      { id: 'jina', label: 'Jina AI', baseUrl: 'https://api.jina.ai/v1', model: 'jina-reranker-v2-base-multilingual' },
+      { id: 'cohere', label: 'Cohere', baseUrl: 'https://api.cohere.ai/compatibility/v1', model: 'rerank-v3.5', style: 'cohere' },
+      { id: 'voyage', label: 'Voyage AI', baseUrl: 'https://api.voyageai.com/v1', model: 'rerank-2' },
+    ]
+
+    function RerankPanel({ collectionId, onChanged }) {
+      const [config, setConfig] = useState(null)
+      const [presetId, setPresetId] = useState('custom')
+      const [busy, setBusy] = useState('')
+      const [message, setMessage] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          const value = await api('rerank', { action: 'get' })
+          setConfig(value)
+          const hit = RERANK_PRESETS.find(
+            (p) => p.id !== 'custom' && p.baseUrl === (value.api?.baseUrl ?? ''),
+          )
+          setPresetId(hit ? hit.id : 'custom')
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const patchApi = useCallback((patch) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, api: { ...cur.api, ...patch } }))
+      }, [])
+
+      const choosePreset = useCallback((id) => {
+        setPresetId(id)
+        const preset = RERANK_PRESETS.find((p) => p.id === id)
+        if (!preset || id === 'custom') return
+        setConfig((cur) => (cur === null ? cur : {
+          ...cur,
+          api: {
+            ...cur.api,
+            baseUrl: preset.baseUrl,
+            model: preset.model,
+            style: preset.style ?? 'openai',
+          },
+        }))
+      }, [])
+
+      const save = useCallback(async () => {
+        setBusy('save')
+        setMessage(null)
+        try {
+          await api('rerank', {
+            action: 'set',
+            config: { provider: config.provider, api: config.api },
+          })
+          setMessage({ kind: 'ok', text: '已保存' })
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, onChanged])
+
+      const test = useCallback(async () => {
+        setBusy('test')
+        setMessage(null)
+        try {
+          await api('rerank', {
+            action: 'set',
+            config: { provider: config.provider, api: config.api },
+          })
+          const r = await api('rerank', { action: 'test' })
+          setMessage({
+            kind: 'ok',
+            text: `连接成功 · 返回 ${r.results} 条 · 耗时 ${r.ms}ms${r.sane ? '' : '（排序可能异常，请检查模型）'}`,
+          })
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, onChanged])
+
+      if (config === null) return h('div', { className: 'kb-notice' }, '加载中…')
+
+      return h('div', null,
+
+        message
+          ? h('div', { className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''} kb-fade-in` }, message.text)
+          : null,
+
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '重排方式'),
+          h('select', {
+            className: 'kb-select',
+            value: config.provider,
+            onChange: (e) => setConfig((cur) => ({ ...cur, provider: e.target.value })),
+          },
+            h('option', { value: 'none' }, '不使用（直接返回融合结果）'),
+            h('option', { value: 'api' }, 'API（OpenAI 兼容 /rerank）'),
+          ),
+          h('div', { className: 'kb-field-hint' },
+            '重排会再发一次请求，能显著提升相关性，但会增加一点延迟和费用。'),
+        ),
+
+        config.provider === 'api'
+          ? h(React.Fragment, null,
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '服务商'),
+                h('select', {
+                  className: 'kb-select',
+                  value: presetId,
+                  onChange: (e) => choosePreset(e.target.value),
+                }, RERANK_PRESETS.map((p) => h('option', { key: p.id, value: p.id }, p.label))),
+              ),
+
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '服务地址'),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: 'https://api.siliconflow.cn/v1',
+                  value: config.api.baseUrl,
+                  onChange: (e) => patchApi({ baseUrl: e.target.value }),
+                }),
+              ),
+
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '模型名'),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: '例如 BAAI/bge-reranker-v2-m3',
+                  value: config.api.model,
+                  onChange: (e) => patchApi({ model: e.target.value }),
+                }),
+                h('div', { className: 'kb-field-hint' },
+                  '与嵌入共用同一个 API Key；若服务商不同，请换成对应的 Key。'),
+              ),
+
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '保留条数'),
+                h('input', {
+                  className: 'kb-input',
+                  type: 'number',
+                  min: 1, max: 50,
+                  value: config.api.topN,
+                  onChange: (e) => patchApi({ topN: Number(e.target.value) || 8 }),
+                }),
+                h('div', { className: 'kb-field-hint' }, '重排后最终返回几条，默认 8'),
+              ),
+            )
+          : null,
+
+        h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
+          h('button', { className: 'kb-btn', disabled: busy !== '', onClick: save },
+            busy === 'save' ? '保存中…' : '保存'),
+          config.provider === 'api'
+            ? h('button', { className: 'kb-btn', disabled: busy !== '', onClick: test },
+                busy === 'test' ? '测试中…' : '测试连接')
+            : null,
+        ),
+      )
+    }
+
+    /* ══════════════════════════ 重排设置结束 ══════════════════════════ */
 
     /* ══════════════════════════ 注册 ══════════════════════════ */
 

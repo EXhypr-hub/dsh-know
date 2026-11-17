@@ -18,6 +18,7 @@ import { readFile, writeFile, unlink } from 'node:fs/promises'
 import { KnowledgeStore, titleFromFilename } from './lib/store.js'
 import { extractDocument, isSupportedExtension, unsupportedReason } from './lib/extract.js'
 import { chunkSections } from './lib/chunk.js'
+import { applyRerank } from './lib/rerank.js'
 import {
   createEmbedder,
   cosine,
@@ -29,8 +30,8 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.2.0'
-const STAGE = 'P1'
+const VERSION = '0.3.0'
+const STAGE = 'P3'
 
 /** 单文件大小上限：50MB */
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -54,6 +55,16 @@ function credentialKey(scope, id) {
   return `${scope}/${id}`
 }
 
+/** 本地推理依赖是否可用（只探测，不加载） */
+async function localLibraryAvailable() {
+  try {
+    await import('@huggingface/transformers')
+    return true
+  } catch {
+    return false
+  }
+}
+
 function fail(code, message, status = 400) {
   return json({ ok: false, error: { code, message } }, status)
 }
@@ -69,6 +80,8 @@ class KnowledgeBase {
     this.importing = new Map()
     this.apiKeyCache = ''
     this.embedderCache = null
+    this.rerankerCache = null
+    this.downloadProgress = null
   }
 
   async start() {
@@ -262,12 +275,27 @@ class KnowledgeBase {
   /* ────────────────────── 嵌入配置 ────────────────────── */
 
   /** 读取嵌入配置（存在 settings 表里） */
-  getEmbedConfig() {
-    return this.store.getSetting('embed', {
+  /** 嵌入配置默认值（新增字段时旧配置也能补齐） */
+  static get EMBED_DEFAULTS() {
+    return {
       provider: 'none',   // none | api | local
       api: { baseUrl: '', model: '', dimension: 0, batchSize: 16 },
-      local: { modelDir: '' },
-    })
+      local: { modelId: '', modelDir: '', mirror: 'hf-mirror', dimension: 0 },
+    }
+  }
+
+  getEmbedConfig() {
+    const stored = this.store.getSetting('embed', null)
+    const defaults = KnowledgeBase.EMBED_DEFAULTS
+    if (!stored) return defaults
+
+    // 深度合并：老版本存的配置缺少 local.modelId 等新字段时补上默认值
+    return {
+      ...defaults,
+      ...stored,
+      api: { ...defaults.api, ...(stored.api ?? {}) },
+      local: { ...defaults.local, ...(stored.local ?? {}) },
+    }
   }
 
   /** API Key 存放位置：优先 DSH 凭据库，读不到则用插件配置文件（均不进 settings 明文） */
@@ -336,55 +364,156 @@ class KnowledgeBase {
     return next
   }
 
-  /** 当前 embedder（含缓存），未配置返回 null */
-  embedder() {
+  /**
+   * 当前 embedder（含缓存）。异步是因为本地实现要动态 import。
+   * 未配置返回 null。
+   */
+  async embedder() {
     const config = this.getEmbedConfig()
     if (config.provider === 'none') return null
 
     const apiKey = this.apiKeyCache ?? ''
-    const cacheKey = `${config.provider}|${JSON.stringify(config.api)}|${apiKey}`
+    const cacheKey = `${config.provider}|${JSON.stringify(config.api)}|${JSON.stringify(config.local)}|${apiKey}`
 
     if (this.embedderCache?.key === cacheKey) return this.embedderCache.embedder
 
-    const embedder = createEmbedder({
+    const embedder = await createEmbedder({
       provider: config.provider,
       api: { ...config.api, apiKey: apiKey ?? '' },
-      local: config.local,
+      local: {
+        ...config.local,
+        modelsDir: join(this.dataRoot, 'models'),
+      },
     })
     this.embedderCache = { key: cacheKey, embedder }
     return embedder
   }
 
+  /** 同步读取已缓存的 embedder（不创建），用于同步方法 */
+  cachedEmbedder() {
+    return this.embedderCache?.embedder ?? null
+  }
+
   /** 测试嵌入服务连通性 */
   async testEmbedder(patch) {
     if (patch) this.setEmbedConfig(patch)
-    const embedder = this.embedder()
+    const embedder = await this.embedder()
     if (!embedder) throw new Error('尚未选择嵌入方式')
     const result = await embedder.test()
-    // 测试成功后把实际维度写回配置
-    if (result.dimension) this.setEmbedConfig({ api: { dimension: result.dimension } })
+    // 测试成功后把实际维度写回配置（本地与 API 都要记）
+    if (result.dimension) {
+      const provider = this.getEmbedConfig().provider
+      if (provider === 'local') this.setEmbedConfig({ local: { dimension: result.dimension } })
+      else this.setEmbedConfig({ api: { dimension: result.dimension } })
+    }
     return { ...result, modelId: embedder.id }
+  }
+
+  /** 当前重排器（含缓存），未配置返回 null */
+  async reranker() {
+    const config = this.getRerankConfig()
+    if (config.provider === 'none') return null
+
+    const apiKey = this.apiKeyCache ?? ''
+    const cacheKey = `rr|${JSON.stringify(config)}|${apiKey}`
+
+    if (this.rerankerCache?.key === cacheKey) return this.rerankerCache.reranker
+
+    const { ApiReranker } = await import('./lib/rerank.js')
+    const reranker = new ApiReranker({
+      ...config,
+      api: { ...config.api, apiKey },
+    })
+    this.rerankerCache = { key: cacheKey, reranker }
+    return reranker
+  }
+
+  /** 读取重排配置 */
+  getRerankConfig() {
+    return this.store.getSetting('rerank', {
+      provider: 'none',
+      api: { baseUrl: '', model: '', topN: 8, timeoutMs: 20000, style: 'openai' },
+    })
+  }
+
+  /** 保存重排配置 */
+  setRerankConfig(patch) {
+    const current = this.getRerankConfig()
+    const next = {
+      ...current,
+      ...patch,
+      api: { ...current.api, ...(patch.api ?? {}) },
+    }
+    this.store.setSetting('rerank', next)
+    this.rerankerCache = null
+    return next
+  }
+
+  /** 测试重排服务 */
+  async testReranker(patch) {
+    if (patch) this.setRerankConfig(patch)
+    const reranker = await this.reranker()
+    if (!reranker) throw new Error('尚未配置重排方式')
+    return reranker.test()
   }
 
   /* ────────────────────── 向量索引 ────────────────────── */
 
   /** 当前模型下、某库的向量覆盖情况 */
+  /**
+   * 当前模型下、某库的向量覆盖情况。
+   *
+   * modelId 直接从配置推算，不依赖 embedder 实例是否已创建——
+   * 否则刚启动（实例还没建）会把已有的索引误报成"未配置"。
+   */
   embedStatus(collectionId = null) {
-    const embedder = this.embedder()
-    if (!embedder) {
-      return { configured: false, modelId: null, embedded: 0, total: this.store.countChunks(collectionId), complete: false }
+    const config = this.getEmbedConfig()
+    if (config.provider === 'none') {
+      return {
+        configured: false,
+        modelId: null,
+        embedded: 0,
+        total: this.store.countChunks(collectionId),
+        complete: false,
+      }
     }
-    const modelId = embedder.id
+
+    const modelId = this.expectedModelId()
     const embedded = this.store.countEmbeddings(modelId, collectionId)
     const total = this.store.countChunks(collectionId)
     return {
       configured: true,
+      provider: config.provider,
       modelId,
-      label: embedder.label,
+      label: this.modelLabel(),
       embedded,
       total,
       complete: total > 0 && embedded >= total,
     }
+  }
+
+  /** 依据配置推算当前模型标识（不创建实例） */
+  expectedModelId() {
+    const config = this.getEmbedConfig()
+    if (config.provider === 'api') {
+      return modelIdOf('api', config.api.model ?? '', config.api.dimension ?? 0)
+    }
+    if (config.provider === 'local') {
+      const ref = config.local.modelDir || config.local.modelId || 'none'
+      return `local:${ref}:${config.local.dimension ?? 0}`
+    }
+    return 'none'
+  }
+
+  /** 当前模型的可读名称 */
+  modelLabel() {
+    const config = this.getEmbedConfig()
+    if (config.provider === 'api') return `${config.api.model || '未命名'}（API）`
+    if (config.provider === 'local') {
+      const ref = config.local.modelDir || config.local.modelId || '未选择'
+      return `${ref}（本地）`
+    }
+    return '未配置'
   }
 
   /**
@@ -392,7 +521,7 @@ class KnowledgeBase {
    * @param {{ collectionId: number|null, onProgress?: (done:number,total:number)=>void, signal?: AbortSignal }} options
    */
   async embedCollection({ collectionId = null, onProgress, signal } = {}) {
-    const embedder = this.embedder()
+    const embedder = await this.embedder()
     if (!embedder) throw new Error('尚未配置嵌入模型，请先在设置里接入')
 
     /*
@@ -409,7 +538,7 @@ class KnowledgeBase {
     this.setEmbedConfig({ api: { dimension: embedder.dimensionResolved } })
 
     // 配置刚被改写，缓存已清空，重新取一个 id 稳定的实例
-    const stable = this.embedder()
+    const stable = await this.embedder()
     if (!stable) throw new Error('嵌入配置保存失败')
 
     const modelId = stable.id
@@ -459,7 +588,7 @@ class KnowledgeBase {
 
     if (!useVector) return { hits: keywordHits.slice(0, limit), mode: 'keyword' }
 
-    const embedder = this.embedder()
+    const embedder = await this.embedder()
     if (!embedder) {
       return {
         hits: keywordHits.slice(0, limit),
@@ -511,8 +640,32 @@ class KnowledgeBase {
     scored.sort((a, b) => b.similarity - a.similarity)
     const vectorHits = scored.slice(0, limit * 3)
 
-    const hits = fuseResults(keywordHits, vectorHits, { limit })
-    return { hits, mode: 'hybrid', note: status.complete ? undefined : '部分文档尚未建立向量索引' }
+    // 先融合出一批候选（多取一些给重排挑）
+    const candidateLimit = Math.max(limit, 20)
+    let hits = fuseResults(keywordHits, vectorHits, { limit: candidateLimit })
+
+    let rerankNote
+    let reranked = false
+    const reranker = await this.reranker()
+    if (reranker?.configured && hits.length > 1) {
+      try {
+        const results = await reranker.rerank(query, hits)
+        hits = applyRerank(hits, results, limit)
+        reranked = true
+      } catch (error) {
+        rerankNote = `重排失败（${error instanceof Error ? error.message : String(error)}），已按融合分数返回`
+        hits = hits.slice(0, limit)
+      }
+    } else {
+      hits = hits.slice(0, limit)
+    }
+
+    return {
+      hits,
+      mode: reranked ? 'hybrid+rerank' : 'hybrid',
+      reranked,
+      note: rerankNote ?? (status.complete ? undefined : '部分文档尚未建立向量索引'),
+    }
   }
 }
 
@@ -631,11 +784,89 @@ export function apply(ctx, config) {
       json({ ok: true, value: kb.embedStatus(body.collectionId ? Number(body.collectionId) : null) }))
 
     /* ── 删除向量索引 ── */
-    route('/api/dsh-knowbase/embed/clear', (body) => {
-      const embedder = kb.embedder()
-      if (!embedder) return fail('dsh-knowbase/no-embedder', '尚未配置嵌入模型')
-      kb.store.clearEmbeddings(embedder.id, body.collectionId ? Number(body.collectionId) : null)
+    route('/api/dsh-knowbase/embed/clear', async (body) => {
+      const modelId = kb.expectedModelId()
+      if (modelId === 'none') return fail('dsh-knowbase/no-embedder', '尚未配置嵌入模型')
+      kb.store.clearEmbeddings(modelId, body.collectionId ? Number(body.collectionId) : null)
       return json({ ok: true, value: { cleared: true } })
+    })
+
+    /* ── 本地模型管理 ── */
+    route('/api/dsh-knowbase/models', async (body) => {
+      const modelsDir = join(kb.dataRoot, 'models')
+
+      if (body.action === 'catalog') {
+        const { MODEL_CATALOG, MIRRORS, listLocalModels } = await import('./lib/models.js')
+        const local = await listLocalModels(modelsDir)
+        return json({
+          ok: true,
+          value: {
+            catalog: Object.entries(MODEL_CATALOG).map(([id, spec]) => ({
+              id,
+              name: spec.name,
+              dim: spec.dim,
+              sizeMB: spec.sizeMB,
+              note: spec.note,
+            })),
+            mirrors: MIRRORS.map((m) => ({ id: m.id, label: m.label })),
+            local,
+            // 本地推理库是否已安装：没装时界面给出安装指引，而不是让用户点了才报错
+            libAvailable: await localLibraryAvailable(),
+            installHint: '在插件目录下执行：npm install @huggingface/transformers',
+          },
+        })
+      }
+
+      if (body.action === 'list') {
+        const { listLocalModels } = await import('./lib/models.js')
+        return json({ ok: true, value: await listLocalModels(modelsDir) })
+      }
+
+      if (body.action === 'remove') {
+        const { removeLocalModel } = await import('./lib/models.js')
+        await removeLocalModel(modelsDir, String(body.modelId ?? ''))
+        return json({ ok: true, value: { removed: true } })
+      }
+
+      if (body.action === 'inspect') {
+        const { inspectLocalModel } = await import('./lib/models.js')
+        return json({ ok: true, value: await inspectLocalModel(modelsDir, String(body.modelId ?? '')) })
+      }
+
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    /* ── 模型下载（长任务，单独一条路由）── */
+    route('/api/dsh-knowbase/models/download', async (body) => {
+      const { downloadModel } = await import('./lib/models.js')
+      const modelsDir = join(kb.dataRoot, 'models')
+      const result = await downloadModel({
+        modelId: String(body.modelId ?? ''),
+        modelsDir,
+        onProgress: (done, total, detail) => {
+          kb.downloadProgress = { done, total, detail, at: Date.now() }
+        },
+      })
+      kb.downloadProgress = null
+      return json({ ok: true, value: result })
+    })
+
+    route('/api/dsh-knowbase/models/progress', () =>
+      json({ ok: true, value: kb.downloadProgress ?? null }))
+
+    /* ── 重排设置 ── */
+    route('/api/dsh-knowbase/rerank', async (body) => {
+      if (body.action === 'get') {
+        return json({ ok: true, value: kb.getRerankConfig() })
+      }
+      if (body.action === 'set') {
+        return json({ ok: true, value: kb.setRerankConfig(body.config ?? {}) })
+      }
+      if (body.action === 'test') {
+        const result = await kb.testReranker(body.config)
+        return json({ ok: true, value: result })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
     // 上传：base64 传输（P1 用简单方式，P2 视需要换流式）

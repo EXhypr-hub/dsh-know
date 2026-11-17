@@ -483,6 +483,94 @@ await test('切库清空检索状态（前端逻辑）', async () => {
   ok('切库清空检索状态', `${required.length} 项状态均重置，含在途请求作废`)
 })
 
+// 8. P3：重排与本地模型
+await test('重排配置归一化', async () => {
+  const { resolveRerankConfig } = await import('../lib/rerank.js')
+
+  // 非法输入要落到安全默认值
+  const bad = resolveRerankConfig(null)
+  if (bad.provider !== 'none') throw new Error('空配置应为 none')
+  if (bad.api.topN !== 8) throw new Error('topN 默认值不对')
+
+  const clamped = resolveRerankConfig({ provider: 'api', api: { topN: 999 } })
+  if (clamped.api.topN > 50) throw new Error('topN 未做上限收敛')
+
+  const styled = resolveRerankConfig({ provider: 'api', api: { style: 'cohere' } })
+  if (styled.api.style !== 'cohere') throw new Error('style 未保留')
+
+  const fallback = resolveRerankConfig({ provider: 'api', api: { style: '乱写' } })
+  if (fallback.api.style !== 'openai') throw new Error('非法 style 应回落 openai')
+
+  ok('重排配置归一化', '默认值 / 上限 / 风格回落均正确')
+})
+
+await test('重排结果应用', async () => {
+  const { applyRerank } = await import('../lib/rerank.js')
+
+  const candidates = [
+    { id: 1, text: 'A' },
+    { id: 2, text: 'B' },
+    { id: 3, text: 'C' },
+  ]
+
+  // 重排把 C 排到最前，只取 2 条
+  const out = applyRerank(candidates, [
+    { index: 2, score: 0.9 },
+    { index: 0, score: 0.5 },
+    { index: 1, score: 0.1 },
+  ], 2)
+
+  if (out.length !== 2) throw new Error(`应返回 2 条，实际 ${out.length}`)
+  if (out[0].id !== 3) throw new Error('排序未生效')
+  if (out[0].rerankScore !== 0.9) throw new Error('分数未带上')
+
+  // 重排返回空时应原样回落
+  const fallback = applyRerank(candidates, [], 2)
+  if (fallback.length !== 2) throw new Error('空重排应回落到原顺序')
+  if (fallback[0].rerankScore !== null) throw new Error('回落时不应带分数')
+
+  // 越界索引要忽略，不能崩
+  const oob = applyRerank(candidates, [{ index: 99, score: 1 }], 2)
+  if (oob.length === 0) throw new Error('越界索引导致结果为空')
+
+  ok('重排结果应用', '排序 / 截断 / 空结果回落 / 越界防护均正确')
+})
+
+await test('本地模型目录管理', async () => {
+  const { MODEL_CATALOG, inspectLocalModel, listLocalModels, downloadModel } =
+    await import('../lib/models.js')
+
+  // 目录清单完整性
+  const ids = Object.keys(MODEL_CATALOG)
+  if (ids.length < 3) throw new Error('模型清单过少')
+  for (const id of ids) {
+    const spec = MODEL_CATALOG[id]
+    if (!spec.repo) throw new Error(`${id} 缺 repo`)
+    if (!Array.isArray(spec.files) || spec.files.length === 0) throw new Error(`${id} 缺文件清单`)
+    if (!spec.dim) throw new Error(`${id} 缺维度`)
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), 'kb-models-'))
+
+  // 不存在的模型
+  const none = await inspectLocalModel(dir, ids[0])
+  if (none.complete) throw new Error('空目录不该判为完整')
+  if (none.missing.length !== MODEL_CATALOG[ids[0]].files.length) throw new Error('缺失项统计不对')
+
+  // 空目录列表
+  const empty = await listLocalModels(join(dir, 'nope'))
+  if (!Array.isArray(empty) || empty.length !== 0) throw new Error('不存在的目录应返回空数组')
+
+  // 未知模型要报错
+  let threw = false
+  try {
+    await downloadModel({ modelId: '不存在', modelsDir: dir })
+  } catch { threw = true }
+  if (!threw) throw new Error('未知模型应报错')
+
+  ok('本地模型目录管理', `${ids.length} 个模型，缺失统计与错误处理正确`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
