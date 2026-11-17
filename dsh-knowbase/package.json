@@ -38,7 +38,11 @@
     "selftest": "node scripts/selftest.mjs",
     "slim": "node scripts/slim.mjs",
     "slim:restore": "node scripts/slim.mjs --restore",
-    "slim:check": "node scripts/slim.mjs --dry-run"
+    "slim:check": "node scripts/slim.mjs --dry-run",
+    "build:tgz": "node scripts/build-release.mjs --tgz",
+    "build:offline": "node scripts/build-release.mjs --offline",
+    "build:all": "node scripts/build-release.mjs --all",
+    "publish:check": "node scripts/publish-check.mjs"
   },
   "files": [
     "index.js",

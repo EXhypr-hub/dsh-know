@@ -1,0 +1,8 @@
+url: https://github.com/EXhypr-hub/dsh-know
+name: EXhypr-hub/dsh-know
+category: memory
+description:
+  en: Local knowledge base with hybrid keyword and vector search, five agent tools, and citation-ready excerpts.
+  zh: 本地知识库：关键词与向量混合检索，提供五个智能体工具，返回带书名与页码的原文片段。
+tarball: https://github.com/EXhypr-hub/dsh-know/releases/latest/download/dsh-knowbase.tgz
+icon: https://raw.githubusercontent.com/EXhypr-hub/dsh-know/main/dsh-knowbase/icon.svg
