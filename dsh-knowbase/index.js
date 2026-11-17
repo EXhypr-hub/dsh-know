@@ -13,10 +13,21 @@
 import { homedir } from 'node:os'
 import { join, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { readFile, writeFile, unlink } from 'node:fs/promises'
 
 import { KnowledgeStore, titleFromFilename } from './lib/store.js'
 import { extractDocument, isSupportedExtension, unsupportedReason } from './lib/extract.js'
 import { chunkSections } from './lib/chunk.js'
+import {
+  createEmbedder,
+  cosine,
+  fromBlob,
+  toBlob,
+  normalize,
+  fuseResults,
+  modelIdOf,
+  hashText,
+} from './lib/embed.js'
 
 const VERSION = '0.2.0'
 const STAGE = 'P1'
@@ -38,6 +49,11 @@ function json(value, status = 200) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store' } })
 }
 
+/** 构造凭据记录键：<scope>/<id> */
+function credentialKey(scope, id) {
+  return `${scope}/${id}`
+}
+
 function fail(code, message, status = 400) {
   return json({ ok: false, error: { code, message } }, status)
 }
@@ -51,12 +67,16 @@ class KnowledgeBase {
     this.ready = false
     this.readyError = null
     this.importing = new Map()
+    this.apiKeyCache = ''
+    this.embedderCache = null
   }
 
   async start() {
     try {
       await this.store.open()
       this.store.ensureDefaultCollection()
+      // 预加载 API Key（凭据库或本地文件），失败不影响启动
+      this.apiKeyCache = await this.loadApiKey()
       this.ready = true
     } catch (error) {
       this.ready = false
@@ -238,6 +258,243 @@ class KnowledgeBase {
   search(query, options) {
     return this.store.search(query, options)
   }
+
+  /* ────────────────────── 嵌入配置 ────────────────────── */
+
+  /** 读取嵌入配置（存在 settings 表里） */
+  getEmbedConfig() {
+    return this.store.getSetting('embed', {
+      provider: 'none',   // none | api | local
+      api: { baseUrl: '', model: '', dimension: 0, batchSize: 16 },
+      local: { modelDir: '' },
+    })
+  }
+
+  /** API Key 存放位置：优先 DSH 凭据库，读不到则用插件配置文件（均不进 settings 明文） */
+  async loadApiKey() {
+    try {
+      const credentials = this.ctx?.get?.('credentials')
+      if (credentials?.readRecord) {
+        const record = await credentials.readRecord(credentialKey('dsh-knowbase', 'embed-api'))
+        const value = record?.value ?? record?.secret
+        if (typeof value === 'string' && value !== '') return value
+      }
+    } catch {
+      // 凭据服务不可用时回落到本地文件
+    }
+    try {
+      const raw = await readFile(this.secretPath(), 'utf8')
+      const parsed = JSON.parse(raw)
+      return typeof parsed?.apiKey === 'string' ? parsed.apiKey : ''
+    } catch {
+      return ''
+    }
+  }
+
+  async saveApiKey(apiKey) {
+    const trimmed = String(apiKey ?? '').trim()
+    // 先尝试 DSH 凭据库（不进任何配置文件）
+    try {
+      const credentials = this.ctx?.get?.('credentials')
+      if (credentials?.modifyRecord) {
+        await credentials.modifyRecord(credentialKey('dsh-knowbase', 'embed-api'), async () => (trimmed ? { value: trimmed } : undefined))
+        this.apiKeyCache = trimmed
+        return { stored: 'credentials' }
+      }
+    } catch {
+      // 落到本地文件
+    }
+    if (trimmed === '') {
+      await unlink(this.secretPath()).catch(() => {})
+    } else {
+      // 权限收紧：仅当前用户可读写
+      await writeFile(this.secretPath(), JSON.stringify({ apiKey: trimmed }), { mode: 0o600 })
+    }
+    this.apiKeyCache = trimmed
+    return { stored: 'file' }
+  }
+
+  secretPath() {
+    return join(this.dataRoot, 'secrets.json')
+  }
+
+  hasApiKey() {
+    return typeof this.apiKeyCache === 'string' && this.apiKeyCache !== ''
+  }
+
+  /** 保存嵌入配置。API Key 单独走凭据，不写进这里 */
+  setEmbedConfig(patch) {
+    const current = this.getEmbedConfig()
+    const next = {
+      ...current,
+      ...patch,
+      api: { ...current.api, ...(patch.api ?? {}) },
+      local: { ...current.local, ...(patch.local ?? {}) },
+    }
+    this.store.setSetting('embed', next)
+    this.embedderCache = null
+    return next
+  }
+
+  /** 当前 embedder（含缓存），未配置返回 null */
+  embedder() {
+    const config = this.getEmbedConfig()
+    if (config.provider === 'none') return null
+
+    const apiKey = this.apiKeyCache ?? ''
+    const cacheKey = `${config.provider}|${JSON.stringify(config.api)}|${apiKey}`
+
+    if (this.embedderCache?.key === cacheKey) return this.embedderCache.embedder
+
+    const embedder = createEmbedder({
+      provider: config.provider,
+      api: { ...config.api, apiKey: apiKey ?? '' },
+      local: config.local,
+    })
+    this.embedderCache = { key: cacheKey, embedder }
+    return embedder
+  }
+
+  /** 测试嵌入服务连通性 */
+  async testEmbedder(patch) {
+    if (patch) this.setEmbedConfig(patch)
+    const embedder = this.embedder()
+    if (!embedder) throw new Error('尚未选择嵌入方式')
+    const result = await embedder.test()
+    // 测试成功后把实际维度写回配置
+    if (result.dimension) this.setEmbedConfig({ api: { dimension: result.dimension } })
+    return { ...result, modelId: embedder.id }
+  }
+
+  /* ────────────────────── 向量索引 ────────────────────── */
+
+  /** 当前模型下、某库的向量覆盖情况 */
+  embedStatus(collectionId = null) {
+    const embedder = this.embedder()
+    if (!embedder) {
+      return { configured: false, modelId: null, embedded: 0, total: this.store.countChunks(collectionId), complete: false }
+    }
+    const modelId = embedder.id
+    const embedded = this.store.countEmbeddings(modelId, collectionId)
+    const total = this.store.countChunks(collectionId)
+    return {
+      configured: true,
+      modelId,
+      label: embedder.label,
+      embedded,
+      total,
+      complete: total > 0 && embedded >= total,
+    }
+  }
+
+  /**
+   * 为某库补齐向量。分批调用 API，边算边写库，可被中断。
+   * @param {{ collectionId: number|null, onProgress?: (done:number,total:number)=>void, signal?: AbortSignal }} options
+   */
+  async embedCollection({ collectionId = null, onProgress, signal } = {}) {
+    const embedder = this.embedder()
+    if (!embedder) throw new Error('尚未配置嵌入模型，请先在设置里接入')
+
+    const modelId = embedder.id
+    let done = 0
+    const total = this.store.countEmbeddings(modelId, collectionId) === 0
+      ? this.store.countChunks(collectionId)
+      : this.store.countChunks(collectionId)
+
+    // 逐批处理，避免一次拉太多
+    for (;;) {
+      if (signal?.aborted) throw new Error('已取消')
+      const pending = this.store.chunksNeedingEmbedding(modelId, collectionId, 64)
+      if (pending.length === 0) break
+
+      const texts = pending.map((row) => row.text)
+      const vectors = await embedder.embed(texts)
+
+      const rows = []
+      for (let i = 0; i < pending.length; i++) {
+        const vec = normalize(Float32Array.from(vectors[i]))
+        rows.push({
+          chunkId: pending[i].chunk_id,
+          dimension: vec.length,
+          vec: toBlob(vec),
+          textHash: hashText(pending[i].text),
+        })
+      }
+      this.store.saveEmbeddings(modelId, rows)
+
+      done += pending.length
+      onProgress?.(done, total)
+    }
+
+    return { modelId, embedded: this.store.countEmbeddings(modelId, collectionId), total }
+  }
+
+  /* ────────────────────── 混合检索 ────────────────────── */
+
+  /**
+   * 语义检索：向量相似度 + 关键词，融合排序。
+   * @returns {Promise<{ hits: Array, mode: 'hybrid'|'keyword', note?: string }>}
+   */
+  async semanticSearch(query, { collectionId = null, limit = 10, useVector = true } = {}) {
+    const keywordHits = this.store.search(query, { collectionId, limit: limit * 3 })
+
+    if (!useVector) return { hits: keywordHits.slice(0, limit), mode: 'keyword' }
+
+    const embedder = this.embedder()
+    if (!embedder) {
+      return {
+        hits: keywordHits.slice(0, limit),
+        mode: 'keyword',
+        note: '未配置嵌入模型，当前仅用关键词检索',
+      }
+    }
+
+    const status = this.embedStatus(collectionId)
+    if (status.embedded === 0) {
+      return {
+        hits: keywordHits.slice(0, limit),
+        mode: 'keyword',
+        note: '该库还没有向量索引，仅用关键词检索。可在设置里点「建立向量索引」',
+      }
+    }
+
+    // 查询向量
+    let queryVector
+    try {
+      const [vec] = await embedder.embed([query])
+      queryVector = normalize(Float32Array.from(vec))
+    } catch (error) {
+      return {
+        hits: keywordHits.slice(0, limit),
+        mode: 'keyword',
+        note: `生成查询向量失败（${error instanceof Error ? error.message : String(error)}），回退到关键词检索`,
+      }
+    }
+
+    // 全量打分（10 万块以内暴力扫描够用）
+    const rows = this.store.listVectors(collectionId, status.modelId)
+    const scored = []
+    for (const row of rows) {
+      const vec = fromBlob(row.vec)
+      const score = cosine(queryVector, vec)
+      scored.push({
+        id: row.chunk_id,
+        text: row.text,
+        page: row.page,
+        heading: row.heading,
+        document_id: row.document_id,
+        title: row.title,
+        collection_id: row.collection_id,
+        similarity: score,
+      })
+    }
+
+    scored.sort((a, b) => b.similarity - a.similarity)
+    const vectorHits = scored.slice(0, limit * 3)
+
+    const hits = fuseResults(keywordHits, vectorHits, { limit })
+    return { hits, mode: 'hybrid', note: status.complete ? undefined : '部分文档尚未建立向量索引' }
+  }
 }
 
 export function apply(ctx, config) {
@@ -305,12 +562,61 @@ export function apply(ctx, config) {
       return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
-    route('/api/dsh-knowbase/search', (body) => {
-      const results = kb.search(body.query, {
+    route('/api/dsh-knowbase/search', async (body) => {
+      const query = String(body.query ?? '').trim()
+      if (!query) return fail('dsh-knowbase/empty-query', '查询内容不能为空')
+
+      const result = await kb.semanticSearch(query, {
         collectionId: body.collectionId ? Number(body.collectionId) : null,
         limit: Math.min(Number(body.limit ?? 10), 50),
+        useVector: body.useVector !== false,
       })
-      return json({ ok: true, value: results })
+      return json({ ok: true, value: result })
+    })
+
+    /* ── 嵌入设置 ── */
+    route('/api/dsh-knowbase/embed', async (body) => {
+      if (body.action === 'get') {
+        const config = kb.getEmbedConfig()
+        // 只回传是否已配置 Key，绝不回传明文
+        return json({
+          ok: true,
+          value: {
+            ...config,
+            api: { ...config.api, hasKey: kb.hasApiKey() },
+            status: kb.embedStatus(body.collectionId ? Number(body.collectionId) : null),
+          },
+        })
+      }
+      if (body.action === 'set') {
+        const saved = kb.setEmbedConfig(body.config ?? {})
+        // API Key 单独存放，绝不写进 settings
+        if (typeof body.apiKey === 'string') await kb.saveApiKey(body.apiKey)
+        return json({ ok: true, value: { ...saved, api: { ...saved.api, hasKey: kb.hasApiKey() } } })
+      }
+      if (body.action === 'test') {
+        const result = await kb.testEmbedder(body.config)
+        return json({ ok: true, value: result })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    /* ── 建立向量索引 ── */
+    route('/api/dsh-knowbase/embed/build', async (body) => {
+      const collectionId = body.collectionId ? Number(body.collectionId) : null
+      const result = await kb.embedCollection({ collectionId })
+      return json({ ok: true, value: result })
+    })
+
+    route('/api/dsh-knowbase/embed/status', (body) =>
+      json({ ok: true, value: kb.embedStatus(body.collectionId ? Number(body.collectionId) : null) }))
+
+    /* ── 删除向量索引 ── */
+    route('/api/dsh-knowbase/embed/clear', (body) => {
+      const embedder = kb.embedder()
+      if (!embedder) return fail('dsh-knowbase/no-embedder', '尚未配置嵌入模型')
+      kb.store.clearEmbeddings(embedder.id, body.collectionId ? Number(body.collectionId) : null)
+      return json({ ok: true, value: { cleared: true } })
     })
 
     // 上传：base64 传输（P1 用简单方式，P2 视需要换流式）

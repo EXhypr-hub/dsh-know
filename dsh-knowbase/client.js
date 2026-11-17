@@ -236,6 +236,7 @@ window.__ModuleLoader__.load({
 
 /* ── 检索 ── */
 .kb-search-bar { display: flex; gap: 8px; }
+.kb-search-bar .kb-btn { flex: none; min-width: 60px; }
 .kb-input {
   flex: 1;
   min-width: 0;
@@ -259,9 +260,10 @@ window.__ModuleLoader__.load({
   padding: 10px 12px;
   background: var(--dsw-alias-bg-layer-1);
 }
-.kb-hit-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; font-size: 11.5px; }
+.kb-hit-head { display: flex; align-items: baseline; gap: 7px; margin-bottom: 5px; font-size: 11.5px; flex-wrap: wrap; }
 .kb-hit-doc { font-weight: 600; color: var(--dsw-alias-label-primary); }
 .kb-hit-page { color: var(--dsw-alias-label-secondary); }
+.kb-hit-sep { color: var(--dsw-alias-label-secondary); opacity: 0.5; }
 .kb-hit-text {
   font-size: 12.5px;
   line-height: 1.65;
@@ -351,6 +353,53 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-secondary);
   font-size: 11px;
 }
+
+/* ── 设置面板 ── */
+.kb-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.kb-field-label { font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
+.kb-field-hint { font-size: 10.5px; color: var(--dsw-alias-label-secondary); opacity: 0.85; }
+.kb-field-row { display: flex; gap: 8px; align-items: center; }
+.kb-field-row .kb-input { flex: 1; }
+
+.kb-status-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  background: var(--dsw-alias-bg-layer-2);
+  margin-bottom: 10px;
+}
+.kb-ok { color: var(--dsw-alias-state-success-primary); }
+.kb-warn { color: var(--dsw-alias-state-warn-primary); }
+.kb-err { color: var(--dsw-alias-state-error-primary); }
+
+.kb-tabs { display: flex; gap: 2px; margin-bottom: 12px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.kb-tab {
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.kb-tab:hover { color: var(--dsw-alias-label-primary); }
+.kb-tab-on { color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-brand-primary); font-weight: 600; }
+
+.kb-mode-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-mode-ok { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent); }
 
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -476,6 +525,8 @@ window.__ModuleLoader__.load({
 
       const [creating, setCreating] = useState(false)
       const [newName, setNewName] = useState('')
+      const [tab, setTab] = useState('docs')
+      const [searchMode, setSearchMode] = useState(null)
 
       const fileInputRef = useRef(null)
 
@@ -640,7 +691,10 @@ window.__ModuleLoader__.load({
         setError(null)
         try {
           const value = await api('search', { query: q, collectionId: activeId, limit: 20 })
-          setHits(value)
+          // 兼容两种返回：旧版数组 / 新版 { hits, mode, note }
+          const list = Array.isArray(value) ? value : (value?.hits ?? [])
+          setHits(list)
+          setSearchMode(Array.isArray(value) ? null : { mode: value?.mode, note: value?.note })
           setExpanded(new Set())
         } catch (err) {
           setError(err.message)
@@ -858,7 +912,16 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'kb-section-head' },
                       h('h2', { className: 'kb-section-title' }, '检索测试'),
                       h('span', { className: 'kb-section-meta' }, '验证入库效果'),
+                      searchMode?.mode
+                        ? h('span', {
+                            className: `kb-mode-chip${searchMode.mode === 'hybrid' ? ' kb-mode-ok' : ''}`,
+                            style: { marginLeft: 'auto' },
+                          }, searchMode.mode === 'hybrid' ? '语义 + 关键词' : '仅关键词')
+                        : null,
                     ),
+                    searchMode?.note
+                      ? h('div', { className: 'kb-notice', style: { marginBottom: 8 } }, searchMode.note)
+                      : null,
                     h('div', { className: 'kb-search-bar' },
                       h('input', {
                         className: 'kb-input',
@@ -882,7 +945,9 @@ window.__ModuleLoader__.load({
                             hits.map((hit) => h('div', { key: hit.id, className: 'kb-hit kb-fade-in' },
                               h('div', { className: 'kb-hit-head' },
                                 h('span', { className: 'kb-hit-doc' }, hit.title),
+                                hit.page ? h('span', { className: 'kb-hit-sep' }, '·') : null,
                                 hit.page ? h('span', { className: 'kb-hit-page' }, `第 ${hit.page} 页`) : null,
+                                hit.heading ? h('span', { className: 'kb-hit-sep' }, '·') : null,
                                 hit.heading ? h('span', { className: 'kb-hit-page' }, hit.heading) : null,
                               ),
                               h('div', {
@@ -899,6 +964,18 @@ window.__ModuleLoader__.load({
                             )),
                           )
                       : null,
+                  ),
+
+                  /* 设置 */
+                  h('section', { className: 'kb-section' },
+                    h('div', { className: 'kb-section-head' },
+                      h('h2', { className: 'kb-section-title' }, '检索设置'),
+                      h('span', { className: 'kb-section-meta' }, '接入嵌入模型，启用语义检索'),
+                    ),
+                    h(SettingsPanel, {
+                      collectionId: activeId,
+                      onChanged: () => { refreshStatus(); refreshDocuments(activeId) },
+                    }),
                   ),
                 ),
           ),
@@ -944,7 +1021,7 @@ window.__ModuleLoader__.load({
         setError(null)
         try {
           const value = await api('search', { query: q, collectionId: activeId, limit: 20 })
-          setHits(value)
+          setHits(Array.isArray(value) ? value : (value?.hits ?? []))
           setExpanded(new Set())
         } catch (err) {
           setError(err.message)
@@ -1036,6 +1113,218 @@ window.__ModuleLoader__.load({
           h('span', null, status?.ready ? `v${status.version}` : '未就绪'),
           h('span', { style: { marginLeft: 'auto' } }, status?.counts ? `${status.counts.chunks} 块` : ''),
         ),
+      )
+    }
+
+    /* ══════════════════════════ 设置面板 ══════════════════════════ */
+
+    function SettingsPanel({ collectionId, onChanged }) {
+      const [config, setConfig] = useState(null)
+      const [embedStatus, setEmbedStatus] = useState(null)
+      const [apiKey, setApiKey] = useState('')
+      const [busy, setBusy] = useState('')
+      const [message, setMessage] = useState(null)
+      const [building, setBuilding] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          const value = await api('embed', { action: 'get', collectionId })
+          setConfig(value)
+          setEmbedStatus(value.status)
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [collectionId])
+
+      useEffect(() => { load() }, [load])
+
+      const patchConfig = (patch) => setConfig((cur) => ({
+        ...cur,
+        ...patch,
+        api: { ...cur.api, ...(patch.api ?? {}) },
+      }))
+
+      const save = useCallback(async (extra = {}) => {
+        setBusy('save')
+        setMessage(null)
+        try {
+          await api('embed', {
+            action: 'set',
+            config: { provider: config.provider, api: config.api, local: config.local },
+            ...(apiKey !== '' ? { apiKey } : {}),
+            ...extra,
+          })
+          setApiKey('')
+          await load()
+          setMessage({ kind: 'ok', text: '已保存' })
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, apiKey, load, onChanged])
+
+      const test = useCallback(async () => {
+        setBusy('test')
+        setMessage(null)
+        try {
+          await api('embed', {
+            action: 'set',
+            config: { provider: config.provider, api: config.api, local: config.local },
+            ...(apiKey !== '' ? { apiKey } : {}),
+          })
+          const result = await api('embed', { action: 'test' })
+          setMessage({
+            kind: 'ok',
+            text: `连接成功 · 维度 ${result.dimension} 维 · 耗时 ${result.ms}ms`,
+          })
+          setApiKey('')
+          await load()
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, apiKey, load, onChanged])
+
+      const buildIndex = useCallback(async () => {
+        setBusy('build')
+        setMessage(null)
+        setBuilding({ done: 0, total: embedStatus?.total ?? 0 })
+        try {
+          const result = await api('embed/build', { collectionId })
+          setMessage({ kind: 'ok', text: `索引完成 · 共 ${result.embedded} 条向量` })
+          await load()
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+          setBuilding(null)
+        }
+      }, [collectionId, embedStatus, load, onChanged])
+
+      if (config === null) return h('div', { className: 'kb-notice' }, '加载设置中…')
+
+      const modeLabel = embedStatus?.configured
+        ? (embedStatus.complete ? '向量索引就绪' : '索引不完整')
+        : '未配置嵌入'
+
+      return h('div', null,
+
+        message
+          ? h('div', {
+              className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''} kb-fade-in`,
+            }, message.text)
+          : null,
+
+        /* 当前状态 */
+        h('div', { className: 'kb-status-line' },
+          h('span', { className: embedStatus?.complete ? 'kb-dot kb-dot-on' : 'kb-dot' }),
+          h('span', null, modeLabel),
+          embedStatus?.label ? h('span', { style: { opacity: 0.7 } }, `· ${embedStatus.label}`) : null,
+          h('span', { style: { marginLeft: 'auto' } },
+            `${embedStatus?.embedded ?? 0} / ${embedStatus?.total ?? 0} 块`),
+        ),
+
+        /* 嵌入方式 */
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '嵌入方式'),
+          h('div', { className: 'kb-field-row' },
+            h('select', {
+              className: 'kb-select',
+              value: config.provider,
+              onChange: (e) => patchConfig({ provider: e.target.value }),
+            },
+              h('option', { value: 'none' }, '不使用（仅关键词检索）'),
+              h('option', { value: 'api' }, 'OpenAI 兼容 API'),
+              h('option', { value: 'local' }, '本地模型（P3 提供）'),
+            ),
+          ),
+        ),
+
+        config.provider === 'api'
+          ? h(React.Fragment, null,
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '服务地址'),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: 'https://api.example.com/v1',
+                  value: config.api.baseUrl,
+                  onChange: (e) => patchConfig({ api: { baseUrl: e.target.value } }),
+                }),
+                h('div', { className: 'kb-field-hint' }, '填到 /v1 为止，插件会拼上 /embeddings'),
+              ),
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '模型名'),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: 'text-embedding-3-small',
+                  value: config.api.model,
+                  onChange: (e) => patchConfig({ api: { model: e.target.value } }),
+                }),
+              ),
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' },
+                  'API Key',
+                  config.api.hasKey ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 8 } }, '已保存') : null,
+                ),
+                h('input', {
+                  className: 'kb-input',
+                  type: 'password',
+                  placeholder: config.api.hasKey ? '已保存，留空则不修改' : '粘贴 API Key',
+                  value: apiKey,
+                  onChange: (e) => setApiKey(e.target.value),
+                }),
+                h('div', { className: 'kb-field-hint' },
+                  'Key 存在 DSH 凭据库或数据目录的 secrets.json，不会写进设置文件'),
+              ),
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '批大小'),
+                h('input', {
+                  className: 'kb-input',
+                  type: 'number',
+                  min: 1, max: 64,
+                  value: config.api.batchSize,
+                  onChange: (e) => patchConfig({ api: { batchSize: Number(e.target.value) } }),
+                }),
+                h('div', { className: 'kb-field-hint' }, '一次请求发送多少条文本，默认 16'),
+              ),
+            )
+          : null,
+
+        /* 操作按钮 */
+        h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
+          h('button', {
+            className: 'kb-btn',
+            disabled: busy !== '',
+            onClick: () => save(),
+          }, busy === 'save' ? '保存中…' : '保存'),
+
+          config.provider === 'api'
+            ? h('button', {
+                className: 'kb-btn',
+                disabled: busy !== '',
+                onClick: test,
+              }, busy === 'test' ? '测试中…' : '测试连接')
+            : null,
+
+          h('button', {
+            className: 'kb-btn kb-btn-primary',
+            disabled: busy !== '' || !embedStatus?.configured,
+            onClick: buildIndex,
+          }, busy === 'build' ? '建立中…' : '建立向量索引'),
+        ),
+
+        building
+          ? h('div', { className: 'kb-notice', style: { marginTop: 10 } },
+              `正在建立索引… ${building.done} / ${building.total}`)
+          : null,
+
+        h('div', { className: 'kb-field-hint', style: { marginTop: 12 } },
+          '提示：换嵌入模型后向量维度会变，旧索引不能混用，需要重新点「建立向量索引」。'),
       )
     }
 

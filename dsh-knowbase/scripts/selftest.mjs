@@ -269,6 +269,99 @@ await test('中文切块不碎句', async () => {
   ok('中文切块不碎句', `${chunks.length} 块`)
 })
 
+// 7. P2：向量与融合
+await test('向量基础运算', async () => {
+  const { cosine, normalize, toBlob, fromBlob } = await import('../lib/embed.js')
+  const a = normalize(Float32Array.from([1, 0, 0]))
+  const b = normalize(Float32Array.from([0, 1, 0]))
+  const c = normalize(Float32Array.from([1, 0, 0]))
+
+  if (Math.abs(cosine(a, b)) > 1e-6) throw new Error('正交向量余弦应为 0')
+  if (Math.abs(cosine(a, c) - 1) > 1e-6) throw new Error('相同向量余弦应为 1')
+
+  const round = fromBlob(toBlob(a))
+  if (Math.abs(cosine(a, round) - 1) > 1e-6) throw new Error('BLOB 往返失真')
+  ok('向量基础运算', '余弦 / 归一化 / BLOB 往返')
+})
+
+await test('RRF 融合', async () => {
+  const { fuseResults } = await import('../lib/embed.js')
+  const kw = [{ id: 1, text: 'a' }, { id: 2, text: 'b' }]
+  const vec = [{ id: 2, text: 'b' }, { id: 3, text: 'c' }, { id: 1, text: 'a' }]
+  const fused = fuseResults(kw, vec, { limit: 5 })
+
+  // 两侧都命中的 id=2 应排第一
+  if (fused[0].id !== 2) throw new Error('双路命中项未排首位')
+  if (fused.length !== 3) throw new Error('去重后应有 3 条')
+  const hasBoth = fused[0].sources.length === 2
+  if (!hasBoth) throw new Error('来源标记不正确')
+  ok('RRF 融合', `${fused.length} 条，双路命中排首位`)
+})
+
+await test('向量存储与语义排序', async () => {
+  const { KnowledgeStore } = await import('../lib/store.js')
+  const { cosine, normalize, toBlob, fromBlob, modelIdOf, hashText } = await import('../lib/embed.js')
+
+  const dir = await mkdtemp(join(tmpdir(), 'kb-vec-'))
+  const store = new KnowledgeStore(dir)
+  await store.open()
+  const col = store.ensureDefaultCollection()
+
+  const chunks = [
+    { text: '光合作用把光能转化为化学能', v: [0.9, 0.1, 0.0] },
+    { text: '植物叶绿体进行光合作用产生氧气', v: [0.85, 0.15, 0.05] },
+    { text: '马克思讨论商品拜物教与异化', v: [0.0, 0.1, 0.95] },
+  ]
+  const docId = store.createDocument({
+    collectionId: col.id, title: 't', filename: 't.md', ext: 'md', size: 10, sha256: 'v1',
+  })
+  store.replaceChunks(docId, chunks.map((c, i) => ({ ord: i, text: c.text, tokens: 10 })))
+
+  const model = modelIdOf('api', 'test', 3)
+  store.saveEmbeddings(model, chunks.map((c, i) => ({
+    chunkId: i + 1,
+    dimension: 3,
+    vec: toBlob(normalize(Float32Array.from(c.v))),
+    textHash: hashText(c.text),
+  })))
+
+  if (store.countEmbeddings(model, col.id) !== 3) throw new Error('向量数不对')
+  if (store.chunksNeedingEmbedding(model, col.id).length !== 0) throw new Error('不应再有待建项')
+
+  const qv = normalize(Float32Array.from([0.88, 0.12, 0.02]))
+  const rows = store.listVectors(col.id, model)
+  const ranked = rows
+    .map((r) => ({ text: r.text, sim: cosine(qv, fromBlob(r.vec)) }))
+    .sort((a, b) => b.sim - a.sim)
+
+  if (!ranked[0].text.includes('光合')) throw new Error('最相关项判错')
+  if (ranked[0].sim < 0.9) throw new Error('相似度异常')
+  if (ranked[2].sim > 0.2) throw new Error('无关项相似度过高')
+
+  store.close()
+  ok('向量存储与语义排序', `最相关 ${ranked[0].sim.toFixed(3)} / 最不相关 ${ranked[2].sim.toFixed(3)}`)
+})
+
+await test('API 嵌入错误处理', async () => {
+  const { ApiEmbedder } = await import('../lib/embed.js')
+
+  // 未填地址应立即报错，而不是发出请求
+  const empty = new ApiEmbedder({ baseUrl: '', model: 'x' })
+  let threw = false
+  try { await empty.embedBatch(['a']) } catch { threw = true }
+  if (!threw) throw new Error('空地址应报错')
+
+  // 指向不存在的地址应给出可读错误
+  const bad = new ApiEmbedder({ baseUrl: 'http://127.0.0.1:1/v1', model: 'x', timeoutMs: 1500 })
+  threw = false
+  let message = ''
+  try { await bad.embedBatch(['a']) } catch (error) { threw = true; message = error.message }
+  if (!threw) throw new Error('不可达地址应报错')
+  if (!message) throw new Error('错误信息为空')
+
+  ok('API 嵌入错误处理', '空配置与不可达地址均有明确报错')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

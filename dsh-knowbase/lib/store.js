@@ -106,6 +106,21 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- 向量：每条切块在某个模型下的一条向量记录。
+-- 同一 chunk 可以有多个模型的行（换模型后重建期间新旧并存），
+-- 检索时只取与当前模型一致的那一批。
+CREATE TABLE IF NOT EXISTS embeddings (
+  chunk_id   INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  model_id   TEXT NOT NULL,
+  dimension  INTEGER NOT NULL,
+  vec        BLOB NOT NULL,
+  text_hash  TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (chunk_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model_id);
 `
 
 export class KnowledgeStore {
@@ -358,16 +373,159 @@ export class KnowledgeStore {
     return this.db.prepare('SELECT * FROM jobs ORDER BY started_at DESC LIMIT ?').all(limit)
   }
 
+  /* ────────────────────── 向量 ────────────────────── */
+
+  /** 写入一批向量（事务）。rows: { chunkId, dimension, vec: Buffer, textHash } */
+  saveEmbeddings(modelId, rows) {
+    if (rows.length === 0) return
+    const db = this.db
+    db.exec('BEGIN')
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO embeddings (chunk_id, model_id, dimension, vec, text_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chunk_id, model_id) DO UPDATE SET
+          dimension = excluded.dimension,
+          vec = excluded.vec,
+          text_hash = excluded.text_hash,
+          created_at = excluded.created_at
+      `)
+      const now = Date.now()
+      for (const row of rows) {
+        stmt.run(row.chunkId, modelId, row.dimension, row.vec, row.textHash ?? '', now)
+      }
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** 某知识库下、属于指定模型的所有向量（带切块与文档信息） */
+  listVectors(collectionId, modelId) {
+    const args = [modelId]
+    let filter = ''
+    if (collectionId !== null) {
+      filter = 'AND d.collection_id = ?'
+      args.push(collectionId)
+    }
+    return this.db.prepare(`
+      SELECT e.chunk_id, e.vec, e.dimension, e.text_hash,
+             ch.text, ch.page, ch.heading, ch.ord AS chunk_ord,
+             d.id AS document_id, d.title, d.collection_id
+      FROM embeddings e
+      JOIN chunks ch ON ch.id = e.chunk_id
+      JOIN documents d ON d.id = ch.document_id
+      WHERE e.model_id = ? ${filter}
+    `).all(...args)
+  }
+
+  /** 统计某模型已建向量的切块数 */
+  countEmbeddings(modelId, collectionId = null) {
+    const args = [modelId]
+    let filter = ''
+    if (collectionId !== null) {
+      filter = 'AND d.collection_id = ?'
+      args.push(collectionId)
+    }
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM embeddings e
+      JOIN chunks ch ON ch.id = e.chunk_id
+      JOIN documents d ON d.id = ch.document_id
+      WHERE e.model_id = ? ${filter}
+    `).get(...args)
+    return row?.n ?? 0
+  }
+
+  /** 统计某库的切块总数（用于判断向量覆盖是否完整） */
+  countChunks(collectionId = null) {
+    if (collectionId === null) {
+      return this.db.prepare('SELECT COUNT(*) AS n FROM chunks').get()?.n ?? 0
+    }
+    return this.db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM chunks ch JOIN documents d ON d.id = ch.document_id
+      WHERE d.collection_id = ?
+    `).get(collectionId)?.n ?? 0
+  }
+
+  /** 取出待建向量的切块（按模型过滤掉已建的） */
+  chunksNeedingEmbedding(modelId, collectionId = null, limit = 500) {
+    const args = [modelId]
+    let filter = ''
+    if (collectionId !== null) {
+      filter = 'AND d.collection_id = ?'
+      args.push(collectionId)
+    }
+    args.push(limit)
+    return this.db.prepare(`
+      SELECT ch.id AS chunk_id, ch.text, ch.ord
+      FROM chunks ch
+      JOIN documents d ON d.id = ch.document_id
+      LEFT JOIN embeddings e ON e.chunk_id = ch.id AND e.model_id = ?
+      WHERE e.chunk_id IS NULL ${filter}
+      ORDER BY ch.id
+      LIMIT ?
+    `).all(...args)
+  }
+
+  /** 删除某模型下的全部向量（重建前调用） */
+  clearEmbeddings(modelId, collectionId = null) {
+    if (collectionId === null) {
+      this.db.prepare('DELETE FROM embeddings WHERE model_id = ?').run(modelId)
+      return
+    }
+    this.db.prepare(`
+      DELETE FROM embeddings
+      WHERE model_id = ? AND chunk_id IN (
+        SELECT ch.id FROM chunks ch
+        JOIN documents d ON d.id = ch.document_id
+        WHERE d.collection_id = ?
+      )
+    `).run(modelId, collectionId)
+  }
+
+  /** 清理切块已删除的孤立向量 */
+  pruneEmbeddings() {
+    this.db.prepare(`
+      DELETE FROM embeddings
+      WHERE chunk_id NOT IN (SELECT id FROM chunks)
+    `).run()
+  }
+
+  /* ────────────────────── 设置 ────────────────────── */
+
+  getSetting(key, fallback = null) {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)
+    if (!row) return fallback
+    try {
+      return JSON.parse(row.value)
+    } catch {
+      return row.value
+    }
+  }
+
+  setSetting(key, value) {
+    this.db.prepare(`
+      INSERT INTO settings (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(key, JSON.stringify(value))
+  }
+
+  deleteSetting(key) {
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(key)
+  }
+
   /* ────────────────────── 统计 ────────────────────── */
 
   counts() {
-    const row = this.db.prepare(`
+    return this.db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM collections) AS collections,
         (SELECT COUNT(*) FROM documents)   AS documents,
         (SELECT COUNT(*) FROM chunks)      AS chunks
     `).get()
-    return row
   }
 }
 
