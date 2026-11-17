@@ -34,7 +34,7 @@ const OCR_PROMPT = [
 /** 归一化 OCR 配置 */
 export function resolveOcrConfig(raw) {
   const cfg = raw ?? {}
-  const provider = ['none', 'vision', 'ocr-api'].includes(cfg.provider) ? cfg.provider : 'none'
+  const provider = ['none', 'vision', 'ocr-api', 'local'].includes(cfg.provider) ? cfg.provider : 'none'
   const style = cfg.style === 'ocr-endpoint' ? 'ocr-endpoint' : 'openai'
   return {
     provider,

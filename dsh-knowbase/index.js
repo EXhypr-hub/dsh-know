@@ -926,6 +926,80 @@ class KnowledgeBase {
     return reranker.test()
   }
 
+  /**
+   * 实测 CPU vs DirectML 的速度差。
+   *
+   * 不替用户下结论，而是把真实数字摆出来——
+   * 本机实测 DML 慢 3 倍多，但换台机器、换模型可能不同。
+   * 用户点一下就知道自己这台值不值得开 GPU。
+   */
+  async benchDevice() {
+    const config = this.getEmbedConfig()
+    if (config.provider !== 'local') {
+      throw new Error('需要先把嵌入方式设为「本地模型」，才能测本地推理速度')
+    }
+
+    const { LocalEmbedder } = await import('./lib/embed-local.js')
+    const modelsDir = join(this.dataRoot, 'models')
+    const sample = '光合作用把光能转化为化学能，储存在有机物中'
+    const results = []
+    const task = this.createTask('测速', 2)
+
+    try {
+      for (const device of ['cpu', 'dml']) {
+        this.throwIfAborted(task.controller.signal, '测速')
+        const started = Date.now()
+        try {
+          const embedder = new LocalEmbedder({
+            ...config.local,
+            modelsDir,
+            device,
+          })
+          // 首次调用含模型加载，从第二次开始计时才准
+          await embedder.embed([sample])
+          const warm = Date.now()
+          await embedder.embed([sample, sample, sample])
+          const perCall = (Date.now() - warm) / 3
+          results.push({
+            device,
+            ok: true,
+            loadMs: warm - started,
+            perMs: Number(perCall.toFixed(1)),
+          })
+          await embedder.dispose?.()
+        } catch (error) {
+          results.push({
+            device,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+        this.touchTask(task, { done: results.length })
+      }
+
+      this.settleTask(task, 'done')
+
+      const cpu = results.find((r) => r.device === 'cpu' && r.ok)
+      const dml = results.find((r) => r.device === 'dml' && r.ok)
+      let verdict = null
+      if (cpu && dml) {
+        const ratio = dml.perMs / cpu.perMs
+        verdict = {
+          faster: ratio < 1 ? 'dml' : 'cpu',
+          ratio: Number(ratio.toFixed(2)),
+          summary: ratio < 1
+            ? `你这台机器上 DirectML 快 ${(1 / ratio).toFixed(1)} 倍，可以试试开 GPU`
+            : `你这台机器上 CPU 快 ${ratio.toFixed(1)} 倍，建议保持 CPU`,
+        }
+      }
+
+      return { results, verdict, model: config.local.modelId || config.local.modelDir || '本地模型' }
+    } catch (error) {
+      this.settleTask(task, 'failed', error)
+      throw error
+    }
+  }
+
   /* ────────────────────── 导出 ────────────────────── */
 
   /**
@@ -1145,7 +1219,7 @@ class KnowledgeBase {
   getOcrConfig() {
     const stored = this.store.getSetting('ocr', null)
     const defaults = {
-      provider: 'none',      // none | vision | ocr-api
+      provider: 'none',      // none | vision | ocr-api | local
       style: 'openai',       // openai | ocr-endpoint
       baseUrl: '',
       model: '',
@@ -1180,8 +1254,20 @@ class KnowledgeBase {
   async ocrEngine() {
     const config = this.getOcrConfig()
     if (config.provider === 'none') return null
+
     const cacheKey = `ocr|${JSON.stringify(config)}|${this.store.getSetting('ocrKey', '')}`
     if (this.ocrCache?.key === cacheKey) return this.ocrCache.engine
+
+    // 本地识别：完全离线，不需要 Key
+    if (config.provider === 'local') {
+      const { LocalOcr } = await import('./lib/ocr-local.js')
+      const engine = new LocalOcr({
+        modelsDir: join(this.dataRoot, 'models'),
+        langs: this.getOcrLangs(),
+      })
+      this.ocrCache = { key: cacheKey, engine }
+      return engine
+    }
 
     const { VisionOcr } = await import('./lib/ocr.js')
     const engine = new VisionOcr({
@@ -1190,6 +1276,53 @@ class KnowledgeBase {
     })
     this.ocrCache = { key: cacheKey, engine }
     return engine
+  }
+
+  /** 本地 OCR 要用的语言（默认中英） */
+  getOcrLangs() {
+    const stored = this.store.getSetting('ocrLangs', null)
+    return Array.isArray(stored) && stored.length > 0 ? stored : ['chi_sim', 'eng']
+  }
+
+  /** 设置本地 OCR 语言 */
+  setOcrLangs(langs) {
+    const list = Array.isArray(langs) ? langs.filter((l) => typeof l === 'string' && l !== '') : []
+    this.store.setSetting('ocrLangs', list.length > 0 ? list : ['chi_sim', 'eng'])
+    this.ocrCache = null
+    return this.getOcrLangs()
+  }
+
+  /** 列出本地语言包状态 */
+  async ocrLangStatus() {
+    const { listLangs } = await import('./lib/ocr-local.js')
+    const modelsDir = join(this.dataRoot, 'models')
+    const available = await listLangs(modelsDir)
+    const selected = this.getOcrLangs()
+    return {
+      available,
+      selected,
+      // 缺的包首次识别时会自动下
+      missing: available.filter((l) => selected.includes(l.lang) && !l.downloaded).map((l) => l.lang),
+    }
+  }
+
+  /** 下载一个语言包 */
+  async downloadOcrLang(lang) {
+    const { downloadLang } = await import('./lib/ocr-local.js')
+    const modelsDir = join(this.dataRoot, 'models')
+    const task = this.createTask(`下载 OCR 语言包 ${lang}`, 1)
+    try {
+      const result = await downloadLang(modelsDir, lang, {
+        signal: task.controller.signal,
+        onProgress: (message) => this.touchTask(task, { note: message }),
+      })
+      this.settleTask(task, 'done')
+      this.ocrCache = null
+      return result
+    } catch (error) {
+      this.settleTask(task, 'failed', error)
+      throw error
+    }
   }
 
   /** 测试 OCR：造一张小图跑一遍 */
@@ -1893,10 +2026,23 @@ export function apply(ctx, config) {
       if (body.action === 'test') {
         return json({ ok: true, value: await kb.testOcr(body.config) })
       }
+      if (body.action === 'langs') {
+        return json({ ok: true, value: await kb.ocrLangStatus() })
+      }
+      if (body.action === 'setLangs') {
+        const langs = kb.setOcrLangs(body.langs)
+        return json({ ok: true, value: { langs, status: await kb.ocrLangStatus() } })
+      }
+      if (body.action === 'downloadLang') {
+        return json({ ok: true, value: await kb.downloadOcrLang(String(body.lang ?? '')) })
+      }
       return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
     /* ── 导出与数据目录 ── */
+    route('/api/dsh-knowbase/bench-device', async () =>
+      json({ ok: true, value: await kb.benchDevice() }))
+
     route('/api/dsh-knowbase/export', async (body) =>
       json({
         ok: true,

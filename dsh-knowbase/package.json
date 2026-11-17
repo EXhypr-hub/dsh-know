@@ -20,7 +20,8 @@
   "dependencies": {
     "@huggingface/transformers": "^4.3.2",
     "@napi-rs/canvas": "^1.1.1",
-    "pdfjs-dist": "6.5.438"
+    "pdfjs-dist": "6.5.438",
+    "tesseract.js": "^7.0.0"
   },
   "dsh": {
     "bundle": {

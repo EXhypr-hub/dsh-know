@@ -702,6 +702,29 @@ window.__ModuleLoader__.load({
 }
 .kb-check input { accent-color: var(--dsw-alias-brand-primary); }
 
+.kb-bench {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-langs { display: flex; flex-direction: column; gap: 6px; }
+.kb-lang {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.kb-lang-ok {
+  font-size: 10.5px;
+  color: var(--dsw-alias-state-success-primary);
+  flex: none;
+}
+
 .kb-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 520px) { .kb-grid2 { grid-template-columns: 1fr; } }
 .kb-presets { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -2433,6 +2456,27 @@ window.__ModuleLoader__.load({
 
     function LocalModelPicker({ collectionId, config, patchLocal, onChanged }) {
       const t = useT()
+      const [bench, setBench] = useState('')
+      const [benchResult, setBenchResult] = useState(null)
+
+      /* 让用户用自己的机器测，而不是信我的话 */
+      const runBench = useCallback(async () => {
+        setBench('run')
+        setBenchResult(null)
+        try {
+          const result = await api('bench-device')
+          const cpu = result.results.find((r) => r.device === 'cpu' && r.ok)
+          const dml = result.results.find((r) => r.device === 'dml' && r.ok)
+          const parts = []
+          if (cpu) parts.push('CPU ' + cpu.perMs + 'ms/句')
+          if (dml) parts.push('DirectML ' + dml.perMs + 'ms/句')
+          setBenchResult(parts.join(' · ') + (result.verdict ? ' → ' + result.verdict.summary : ''))
+        } catch (err) {
+          setBenchResult('测速失败：' + err.message)
+        } finally {
+          setBench('')
+        }
+      }, [])
       const [catalog, setCatalog] = useState([])
       const [installed, setInstalled] = useState([])
       const [mirrors, setMirrors] = useState([])
@@ -2655,9 +2699,18 @@ window.__ModuleLoader__.load({
               h('option', { value: 'dml' }, 'GPU — DirectML（实测更慢，仅供试验）'),
             ),
             h('div', { className: 'kb-field-hint' },
-              '本机实测：CPU 3.0ms/句，DirectML 10.1ms/句。'
-              + '单条短文本推理时，显存搬运开销大于计算收益，所以默认 CPU——'
-              + '选 dml 只会更慢，不建议。'),
+              '单条短文本推理时，显存搬运开销常大于计算收益，所以在很多机器上 CPU 更快。'
+              + '但换机器、换模型结果可能不同——点下面的按钮，用你自己这台的真实数字来定。'),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 } },
+              h('button', {
+                className: 'kb-btn kb-btn-sm',
+                disabled: bench !== '',
+                onClick: runBench,
+              }, bench === 'run' ? '测速中…' : '测一下 CPU 和 GPU 哪个快'),
+              benchResult
+                ? h('span', { className: 'kb-bench' }, benchResult)
+                : null,
+            ),
           ),
         ),
 
@@ -3144,6 +3197,7 @@ window.__ModuleLoader__.load({
       if (config === null) return h('div', { className: 'kb-notice' }, t('common.loading'))
 
       const off = config.provider === 'none'
+      const local = config.provider === 'local'
 
       return h('div', null,
         message
@@ -3158,16 +3212,23 @@ window.__ModuleLoader__.load({
             onChange: (e) => patch({ provider: e.target.value }),
           },
             h('option', { value: 'none' }, '不使用（扫描件只入库不入文）'),
-            h('option', { value: 'vision' }, '视觉模型 API（推荐，中文效果好）'),
+            h('option', { value: 'local' }, '本地模型（完全离线，免费）'),
+            h('option', { value: 'vision' }, '视觉模型 API（最准，需 Key）'),
             h('option', { value: 'ocr-api' }, '专用 OCR 接口'),
           ),
           h('div', { className: 'kb-field-hint' },
             off
               ? '关闭时，扫描版 PDF 会被标记为「需 OCR」，内容不会被抽取。'
-              : '开启后，扫描页的**图片**会发往你填的服务。这是识别的前提，请确认接受。'),
+              : local
+                ? '本地识别完全离线、不花钱。代价是慢一些（每页 1–5 秒），复杂排版不如视觉模型准。'
+                : '开启后，扫描页的**图片**会发往你填的服务。这是识别的前提，请确认接受。'),
         ),
 
-        off ? null : h(React.Fragment, null,
+        /* ── 本地 OCR：语言包管理 ── */
+        local ? h(OcrLangs, { onChanged: load }) : null,
+
+        /* ── 云端 OCR：地址/模型/Key/参数 ── */
+        (off || local) ? null : h(React.Fragment, null,
           h('div', { className: 'kb-field' },
             h('label', { className: 'kb-field-label' }, '服务地址'),
             h('input', {
@@ -3239,6 +3300,99 @@ window.__ModuleLoader__.load({
     }
 
     /* ══════════════════════════ OCR 设置结束 ══════════════════════════ */
+
+    /* ══════════════════════════ OCR 语言包 ══════════════════════════ */
+
+    /** 本地 OCR 的语言包管理：勾选语言、缺的现场下载 */
+    function OcrLangs({ onChanged }) {
+      const t = useT()
+      const [status, setStatus] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          setStatus(await api('ocr', { action: 'langs' }))
+        } catch (err) {
+          setError(err.message)
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const toggle = useCallback(async (lang) => {
+        if (status === null) return
+        const next = status.selected.includes(lang)
+          ? status.selected.filter((l) => l !== lang)
+          : [...status.selected, lang]
+        if (next.length === 0) {
+          setError('至少要选一种语言')
+          return
+        }
+        setBusy('langs')
+        setError(null)
+        try {
+          const result = await api('ocr', { action: 'setLangs', langs: next })
+          setStatus(result.status)
+          onChanged?.()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }, [status, onChanged])
+
+      const download = useCallback(async (lang) => {
+        setBusy(lang)
+        setError(null)
+        try {
+          await api('ocr', { action: 'downloadLang', lang })
+          await load()
+          onChanged?.()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }, [load, onChanged])
+
+      if (status === null) return h('div', { className: 'kb-notice' }, t('common.loading'))
+
+      return h('div', { className: 'kb-field' },
+        h('label', { className: 'kb-field-label' }, '识别语言'),
+        error ? h('div', { className: 'kb-field-error' }, error) : null,
+
+        h('div', { className: 'kb-langs' },
+          status.available.map((item) => {
+            const on = status.selected.includes(item.lang)
+            return h('div', { key: item.lang, className: 'kb-lang' },
+              h('label', { className: 'kb-check', style: { marginTop: 0 } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: on,
+                  disabled: busy !== '',
+                  onChange: () => toggle(item.lang),
+                }),
+                h('span', null, `${item.name}（${item.lang} · ${item.sizeMB}MB）`),
+              ),
+              item.downloaded
+                ? h('span', { className: 'kb-lang-ok' }, '已下载')
+                : h('button', {
+                    className: 'kb-btn kb-btn-sm',
+                    disabled: busy !== '',
+                    onClick: () => download(item.lang),
+                  }, busy === item.lang ? '下载中…' : '下载'),
+            )
+          }),
+        ),
+
+        h('div', { className: 'kb-field-hint' },
+          '首次识别时缺的语言包会自动下载。中文包约 1.7MB，很快。'
+          + '语言包存在数据目录的 models/tesseract/ 下，只下一次。'),
+      )
+    }
+
+    /* ══════════════════════════ OCR 语言包结束 ══════════════════════════ */
 
     /* ══════════════════════════ 参数校验 ══════════════════════════ */
 

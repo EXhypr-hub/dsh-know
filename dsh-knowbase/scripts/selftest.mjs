@@ -1016,6 +1016,70 @@ await test('推理设备默认 CPU', async () => {
   ok('推理设备默认 CPU', 'DirectML 实测更慢的结论已写入代码注释')
 })
 
+await test('本地 OCR', async () => {
+  const { LocalOcr, tidyText, OCR_LANGS, listLangs } = await import('../lib/ocr-local.js')
+
+  // 文本清理：中文之间的空格要去掉，英文单词间的要留
+  const zh = tidyText('光合 作用 把 光能 转化')
+  if (zh.includes(' ')) throw new Error(`中文空格未清理：${JSON.stringify(zh)}`)
+  const en = tidyText('OCR TEST 123')
+  if (en !== 'OCR TEST 123') throw new Error(`英文空格被误删：${JSON.stringify(en)}`)
+
+  // 语言清单
+  if (!OCR_LANGS.chi_sim || !OCR_LANGS.eng) throw new Error('缺少中英文语言包定义')
+
+  // 真实识别：画一张含中英文的图
+  const { createCanvas } = await import('@napi-rs/canvas')
+  const canvas = createCanvas(520, 120)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, 520, 120)
+  ctx.fillStyle = '#000'
+  ctx.font = '34px sans-serif'
+  ctx.fillText('本地识别 TEST 2026', 18, 72)
+
+  const modelsDir = 'C:/Users/34096/.dsh/knowbase/models'
+  const status = await listLangs(modelsDir)
+  if (!status.find((l) => l.lang === 'chi_sim')?.downloaded) {
+    ok('本地 OCR', '（跳过识别：中文语言包未下载）')
+    return
+  }
+
+  const ocr = new LocalOcr({ modelsDir, langs: ['chi_sim', 'eng'] })
+  try {
+    const started = Date.now()
+    const text = await ocr.recognizeImage(canvas.toBuffer('image/png'))
+    const ms = Date.now() - started
+    if (!/TEST/i.test(text) || !/2026/.test(text)) {
+      throw new Error(`识别结果不含预期内容：${JSON.stringify(text.slice(0, 80))}`)
+    }
+    ok('本地 OCR', `识别正确 ${ms}ms：${JSON.stringify(text.trim().slice(0, 40))}`)
+  } finally {
+    await ocr.dispose()
+  }
+})
+
+await test('设备测速接口', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 后端要有测速方法，且两种设备都测
+  if (!/async benchDevice\(\)/.test(host)) throw new Error('缺少 benchDevice()')
+  if (!host.includes("for (const device of ['cpu', 'dml'])")) {
+    throw new Error('测速没有覆盖 cpu 和 dml 两种设备')
+  }
+  // 结论要交给数据算，不能写死
+  if (!host.includes('verdict')) throw new Error('缺少结论计算')
+  // 路由要挂上
+  if (!host.includes("'/api/dsh-knowbase/bench-device'")) throw new Error('缺少测速路由')
+
+  // 前端要有按钮与结果展示
+  if (!client.includes('runBench')) throw new Error('前端缺少测速入口')
+
+  ok('设备测速接口', 'CPU/DML 各测一次，结论由实测数据算')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
