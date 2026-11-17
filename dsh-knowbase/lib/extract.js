@@ -122,7 +122,16 @@ export function extractDocx(buffer) {
     if (/^Heading(\d)$/i.test(style)) headings.push(Number(RegExp.$1))
   }
 
-  return { sections: paragraphs.map((text) => ({ text })), meta: { headings: headings.length } }
+  /*
+   * 合并成一个 section，而不是每个段落一个。
+   * 之前每段落独立成 section，chunk 层就无法跨段落合并，
+   * 导致代码类文档被切成大量单行碎片（实测一整份 Java 作业变成 13 个单行块）。
+   * 段落边界用空行保留，chunk 层再按需切分与合并。
+   */
+  return {
+    sections: [{ text: paragraphs.join('\n\n') }],
+    meta: { headings: headings.length },
+  }
 }
 
 /* ────────────────────────── PPTX ────────────────────────── */

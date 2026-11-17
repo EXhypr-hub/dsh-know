@@ -667,6 +667,114 @@ await test('智能体工具与技能', async () => {
   ok('智能体工具与技能', `${required.length} 个工具 + knowledge-base 技能，结果已做 JSON 清洗`)
 })
 
+await test('代码文档切块不再碎成单行', async () => {
+  const { chunkSections, looksLikeCode, looksLikeHeading } = await import('../lib/chunk.js')
+
+  // 判定函数
+  if (!looksLikeCode('int sum = 0;')) throw new Error('未识别代码行')
+  if (!looksLikeCode('    return result;')) throw new Error('未识别缩进代码')
+  if (looksLikeCode('这是一段普通说明文字。')) throw new Error('把普通文字误判成代码')
+
+  if (!looksLikeHeading('光反应')) throw new Error('未识别短标题')
+  if (!looksLikeHeading('1. 研究背景')) throw new Error('未识别编号标题')
+  if (looksLikeHeading('int x = 1;')) throw new Error('把代码行误判成标题')
+  if (looksLikeHeading('这是一个完整的句子。')) throw new Error('把句子误判成标题')
+
+  // 一整段代码应该合成少数几块，而不是每行一块
+  const code = [
+    'public class Main {',
+    '  public static void main(String[] args) {',
+    '    int sum = 0;',
+    '    for (int i = 1; i <= 100; i++) {',
+    '      sum += i;',
+    '    }',
+    '    System.out.println(sum);',
+    '  }',
+    '}',
+  ].join('\n\n')   // 每行之间放空行，模拟 docx 每段一段
+
+  const chunks = chunkSections([{ text: code }])
+  if (chunks.length > 3) {
+    throw new Error(`代码被切成 ${chunks.length} 块，应合并为少数几块`)
+  }
+  const total = chunks.reduce((sum, c) => sum + c.text.length, 0)
+  if (total < 100) throw new Error('代码内容丢失')
+
+  // 不应再有极短块
+  const tiny = chunks.filter((c) => c.text.length < 20)
+  if (tiny.length > 0) throw new Error(`仍有 ${tiny.length} 个碎片块`)
+
+  ok('代码文档切块', `9 行代码 → ${chunks.length} 块，共 ${total} 字符`)
+})
+
+await test('抓取防护', async () => {
+  const { isPrivateHost, parseRobots, isBlockedByRules, waitForSlot, resetFetchState } =
+    await import('../lib/fetch-policy.js')
+
+  // 内网必须拒绝，公网必须放行
+  const mustBlock = ['127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.5.5', 'localhost', 'x.local', '169.254.1.1']
+  const mustPass = ['arxiv.org', '8.8.8.8', '172.32.0.1', 'openstax.org']
+  const wrongBlock = mustBlock.filter((h) => !isPrivateHost(h))
+  const wrongPass = mustPass.filter((h) => isPrivateHost(h))
+  if (wrongBlock.length) throw new Error(`应拒绝但放行: ${wrongBlock.join(', ')}`)
+  if (wrongPass.length) throw new Error(`应放行但拒绝: ${wrongPass.join(', ')}`)
+
+  // robots 解析：通配符与结尾锚点
+  const rules = parseRobots([
+    'User-agent: *',
+    'Disallow: /admin/',
+    'Disallow: /private/*',
+    'Disallow: /*.pdf$',
+    '',
+    'User-agent: Googlebot',
+    'Disallow: /',
+  ].join('\n'))
+
+  if (rules.length !== 3) throw new Error(`robots 规则数不对: ${rules.length}`)
+  if (isBlockedByRules('/admin/x', rules) !== true) throw new Error('/admin/ 应被禁止')
+  if (isBlockedByRules('/public/x', rules) !== false) throw new Error('/public/ 应允许')
+  if (isBlockedByRules('/private/a/b', rules) !== true) throw new Error('通配符规则失效')
+  if (isBlockedByRules('/doc.pdf', rules) !== true) throw new Error('结尾锚点规则失效')
+  if (isBlockedByRules('/doc.html', rules) !== false) throw new Error('.html 不该被 *.pdf 规则拦')
+
+  // 限速：连续两次请求同一站点应至少间隔 MIN_INTERVAL_MS
+  resetFetchState()
+  const t0 = Date.now()
+  await waitForSlot('example.com')
+  await waitForSlot('example.com')
+  const elapsed = Date.now() - t0
+  if (elapsed < 1800) throw new Error(`限速未生效，两次仅间隔 ${elapsed}ms`)
+
+  ok('抓取防护', `内网拦截 / robots 通配符 / 限速 ${elapsed}ms 均生效`)
+})
+
+await test('权威来源清单', async () => {
+  const { SOURCES, sourcesByTopic, sourceForHost } = await import('../lib/sources.js')
+
+  if (SOURCES.length < 10) throw new Error('来源数量过少')
+
+  // 每条都必须有许可说明——不能给用户来路不明的资料
+  const noLicense = SOURCES.filter((s) => !s.license || s.license.trim() === '')
+  if (noLicense.length) throw new Error(`缺少许可说明: ${noLicense.map((s) => s.id).join(', ')}`)
+
+  // 必备字段
+  const incomplete = SOURCES.filter((s) => !s.id || !s.name || !s.host || !s.entry)
+  if (incomplete.length) throw new Error(`字段不全: ${incomplete.map((s) => s.id).join(', ')}`)
+
+  // 主题分组：计划书要求至少覆盖自然科学与马列
+  const groups = sourcesByTopic()
+  const topics = groups.map((g) => g.topic)
+  if (!topics.includes('science')) throw new Error('缺自然科学来源')
+  if (!topics.includes('humanities')) throw new Error('缺人文社科学来源')
+
+  // 域名反查
+  if (sourceForHost('arxiv.org')?.id !== 'arxiv') throw new Error('归属反查失败')
+  if (sourceForHost('export.arxiv.org')?.id !== 'arxiv') throw new Error('子域名反查失败')
+  if (sourceForHost('unknown.example') !== null) throw new Error('未知域名应返回 null')
+
+  ok('权威来源清单', `${SOURCES.length} 条，${groups.length} 个主题，许可信息齐全`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

@@ -471,6 +471,60 @@ window.__ModuleLoader__.load({
 }
 .kb-details summary:hover { color: var(--dsw-alias-label-primary); }
 
+/* ── 抓取设置 ── */
+.kb-textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+}
+.kb-textarea:focus { border-color: var(--dsw-alias-brand-primary); }
+.kb-textarea::placeholder { color: var(--dsw-alias-label-secondary); opacity: 0.8; }
+
+/* ── 来源清单 ── */
+.kb-sources {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kb-source-group { display: flex; flex-direction: column; gap: 6px; }
+.kb-source-topic {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+  letter-spacing: 0.03em;
+}
+.kb-source {
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.kb-source-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kb-source-name { font-size: 12px; font-weight: 600; }
+.kb-source-host {
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+}
+.kb-source-use { font-size: 11.5px; color: var(--dsw-alias-label-secondary); margin-top: 3px; }
+.kb-source-license {
+  font-size: 11px;
+  color: var(--dsw-alias-state-warn-primary);
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .kb-fade-in { animation: kb-fade-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
@@ -1102,6 +1156,15 @@ window.__ModuleLoader__.load({
                       collectionId: activeId,
                       onChanged: () => refreshStatus(),
                     }),
+                  ),
+
+                  /* 抓取设置 */
+                  h('section', { className: 'kb-section' },
+                    h('div', { className: 'kb-section-head' },
+                      h('h2', { className: 'kb-section-title' }, '抓取设置'),
+                      h('span', { className: 'kb-section-meta' }, '联网取权威资料，含来源清单与防护'),
+                    ),
+                    h(FetchPanel, null),
                   ),
                 ),
           ),
@@ -2188,6 +2251,133 @@ window.__ModuleLoader__.load({
     }
 
     /* ══════════════════════════ 重排设置结束 ══════════════════════════ */
+
+    /* ══════════════════════════ 抓取设置 ══════════════════════════ */
+
+    function FetchPanel() {
+      const [config, setConfig] = useState(null)
+      const [sources, setSources] = useState([])
+      const [busy, setBusy] = useState('')
+      const [message, setMessage] = useState(null)
+      const [showSources, setShowSources] = useState(false)
+      const [whitelistText, setWhitelistText] = useState('')
+
+      const load = useCallback(async () => {
+        try {
+          const [cfg, list] = await Promise.all([
+            api('fetch', { action: 'get' }),
+            api('sources'),
+          ])
+          setConfig(cfg)
+          setSources(list ?? [])
+          setWhitelistText((cfg.whitelist ?? []).join('\n'))
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const save = useCallback(async (patch) => {
+        setBusy('save')
+        setMessage(null)
+        try {
+          const next = await api('fetch', {
+            action: 'set',
+            config: {
+              ...(patch ?? {}),
+              whitelist: whitelistText.split('\n').map((s) => s.trim()).filter(Boolean),
+            },
+          })
+          setConfig(next)
+          setMessage({ kind: 'ok', text: '已保存' })
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [whitelistText])
+
+      const toggle = useCallback(async () => {
+        const next = !config.enabled
+        setConfig((cur) => ({ ...cur, enabled: next }))
+        await save({ enabled: next })
+      }, [config, save])
+
+      if (config === null) return h('div', { className: 'kb-notice' }, '加载中…')
+
+      const totalSources = sources.reduce((n, g) => n + g.sources.length, 0)
+
+      return h('div', null,
+
+        message
+          ? h('div', { className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''} kb-fade-in` }, message.text)
+          : null,
+
+        /* 总开关 */
+        h('div', { className: 'kb-status-line' },
+          h('span', { className: config.enabled ? 'kb-dot kb-dot-on' : 'kb-dot' }),
+          h('span', null, config.enabled ? '已允许联网抓取' : '已关闭（完全不联网）'),
+          h('button', {
+            className: 'kb-btn kb-btn-sm',
+            style: { marginLeft: 'auto' },
+            disabled: busy !== '',
+            onClick: toggle,
+          }, config.enabled ? '关闭' : '开启'),
+        ),
+
+        h('div', { className: 'kb-field-hint', style: { marginBottom: 10 } },
+          config.enabled
+            ? '开启后模型可通过 kb_source_fetch 取公开资料。仍会遵守：只走 http/https、拒绝内网地址、读 robots.txt、同站点间隔 2 秒、单文件 ≤100MB、记录来源。'
+            : '关闭时插件完全不访问网络，只用你自己拖进来的文件。'),
+
+        /* 可选白名单 */
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, '站点白名单（可留空）'),
+          h('textarea', {
+            className: 'kb-textarea',
+            rows: 3,
+            placeholder: '留空 = 不限制，允许任意公开站点\n需要更严时，一行填一个域名，例如：\narxiv.org\nopenstax.org',
+            value: whitelistText,
+            onChange: (e) => setWhitelistText(e.target.value),
+          }),
+          h('div', { className: 'kb-field-hint' },
+            whitelistText.trim()
+              ? '已启用白名单：只允许这些域名及其子域名。'
+              : '留空表示不限制——这是你要求的「不要白名单硬约束」。'),
+        ),
+
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' } },
+          h('button', { className: 'kb-btn', disabled: busy !== '', onClick: () => save() },
+            busy === 'save' ? '保存中…' : '保存'),
+          h('button', {
+            className: 'kb-btn',
+            onClick: () => setShowSources((v) => !v),
+          }, showSources ? '收起来源清单' : `查看权威来源（${totalSources}）`),
+        ),
+
+        /* 权威来源清单 */
+        showSources
+          ? h('div', { className: 'kb-sources kb-fade-in' },
+              sources.map((group) => h('div', { key: group.topic, className: 'kb-source-group' },
+                h('div', { className: 'kb-source-topic' }, group.label),
+                group.sources.map((s) => h('div', { key: s.id, className: 'kb-source' },
+                  h('div', { className: 'kb-source-head' },
+                    h('span', { className: 'kb-source-name' }, s.name),
+                    h('span', { className: 'kb-source-host' }, s.host),
+                  ),
+                  h('div', { className: 'kb-source-use' }, s.use),
+                  h('div', { className: 'kb-source-license' }, `许可：${s.license}`),
+                )),
+              )),
+              h('div', { className: 'kb-field-hint', style: { marginTop: 8 } },
+                '这是一份「质量有保证的起点」，不是限制。清单外站点同样可以抓，只要开关打开。'),
+            )
+          : null,
+      )
+    }
+
+    /* ══════════════════════════ 抓取设置结束 ══════════════════════════ */
 
     /* ══════════════════════════ 注册 ══════════════════════════ */
 

@@ -24,6 +24,8 @@ import { chunkSections } from './lib/chunk.js'
 import { applyRerank } from './lib/rerank.js'
 import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
+import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
+import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
   createEmbedder,
   cosine,
@@ -58,31 +60,6 @@ function json(value, status = 200) {
 /** 构造凭据记录键：<scope>/<id> */
 function credentialKey(scope, id) {
   return `${scope}/${id}`
-}
-
-/** 内网 / 回环 / 保留地址判断，供抓取时拒绝 */
-function isPrivateHost(hostname) {
-  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
-  if (host === '') return true
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
-  if (host === '::1' || host === '::') return true
-
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
-  if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])]
-    if (a === 10) return true
-    if (a === 127) return true
-    if (a === 0) return true
-    if (a === 169 && b === 254) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 192 && b === 168) return true
-    if (a === 100 && b >= 64 && b <= 127) return true
-    return false
-  }
-
-  // IPv6 唯一本地地址与链路本地
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true
-  return false
 }
 
 /** 递归收集目录下的可导入文件 */
@@ -263,6 +240,12 @@ class KnowledgeBase {
    *   - 记录来源 URL 与抓取时间
    */
   async fetchSource({ url, collectionId, title }) {
+    // 1. 总开关：关着就完全不联网
+    const policy = this.getFetchConfig()
+    if (!policy.enabled) {
+      throw new Error('联网抓取未开启。请在「抓取设置」里打开开关，或让用户手动把文件拖进来。')
+    }
+
     let parsed
     try {
       parsed = new URL(url)
@@ -272,9 +255,32 @@ class KnowledgeBase {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new Error('只支持 http/https 网址')
     }
+
+    // 2. 内网地址一律拒绝，防止被诱导探测局域网
     if (isPrivateHost(parsed.hostname)) {
       throw new Error(`拒绝访问内网地址：${parsed.hostname}`)
     }
+
+    // 3. 可选白名单：只有用户明确填了才生效
+    if (policy.whitelist.length > 0) {
+      const host = parsed.hostname.toLowerCase()
+      const hit = policy.whitelist.some((w) => host === w || host.endsWith(`.${w}`))
+      if (!hit) {
+        throw new Error(`该站点不在白名单内（${host}）。可在「抓取设置」里添加或清空白名单。`)
+      }
+    }
+
+    // 4. 遵守 robots.txt
+    const robots = await checkRobots(parsed.href)
+    if (!robots.allowed) {
+      throw new Error(`被站点规则拒绝：${robots.reason ?? 'robots.txt 不允许'}`)
+    }
+
+    // 5. 同站点限速，别把人网站打垮
+    await waitForSlot(parsed.hostname)
+
+    // 6. 已知权威来源：带上许可提示，便于回答时如实告知
+    const known = sourceForHost(parsed.hostname)
 
     let response
     try {
@@ -315,10 +321,11 @@ class KnowledgeBase {
       collectionId,
     })
 
-    // 来源留痕：抓来的文档必须能追溯
+    // 来源留痕：抓来的文档必须能追溯，并带上站点声明的许可
     if (outcome.documentId) {
       this.store.setDocumentSource(outcome.documentId, {
         sourceUrl: parsed.href,
+        license: known?.license ?? null,
         fetchedAt: Date.now(),
       })
     }
@@ -332,6 +339,10 @@ class KnowledgeBase {
       chunkCount: outcome.chunkCount ?? 0,
       duplicate: outcome.duplicate === true,
       scanned: outcome.scanned === true,
+      // 引用这些资料时需要如实说明的限制
+      source: known
+        ? { name: known.name, license: known.license, verified: known.verified }
+        : { name: parsed.hostname, license: '未知许可——请用户自行确认能否使用', verified: null },
     }
   }
 
@@ -743,6 +754,46 @@ class KnowledgeBase {
     const reranker = await this.reranker()
     if (!reranker) throw new Error('尚未配置重排方式')
     return reranker.test()
+  }
+
+  /** 读取抓取配置 */
+  getFetchConfig() {
+    const stored = this.store.getSetting('fetch', null)
+    const defaults = {
+      enabled: false,          // 默认关闭：关着完全不联网
+      whitelist: [],           // 可选；空数组表示不限制
+      minIntervalMs: 2000,
+      maxBytes: 100 * 1024 * 1024,
+    }
+    if (!stored) return defaults
+    return {
+      ...defaults,
+      ...stored,
+      whitelist: Array.isArray(stored.whitelist)
+        ? stored.whitelist.map((w) => String(w).trim().toLowerCase()).filter(Boolean)
+        : [],
+    }
+  }
+
+  /** 保存抓取配置 */
+  setFetchConfig(patch) {
+    const current = this.getFetchConfig()
+    const next = {
+      ...current,
+      ...patch,
+      whitelist: patch?.whitelist !== undefined
+        ? (Array.isArray(patch.whitelist)
+          ? patch.whitelist.map((w) => String(w).trim().toLowerCase()).filter(Boolean)
+          : [])
+        : current.whitelist,
+    }
+    this.store.setSetting('fetch', next)
+    return next
+  }
+
+  /** 权威来源清单（按主题分组） */
+  listSources() {
+    return sourcesByTopic()
   }
 
   /* ────────────────────── 向量索引 ────────────────────── */
@@ -1255,6 +1306,20 @@ export function apply(ctx, config) {
         },
       })
     })
+
+    /* ── 抓取设置与权威来源清单 ── */
+    route('/api/dsh-knowbase/fetch', (body) => {
+      if (body.action === 'get') {
+        return json({ ok: true, value: kb.getFetchConfig() })
+      }
+      if (body.action === 'set') {
+        return json({ ok: true, value: kb.setFetchConfig(body.config ?? {}) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    route('/api/dsh-knowbase/sources', () =>
+      json({ ok: true, value: kb.listSources() }))
 
     /* ── 重排设置 ── */
     route('/api/dsh-knowbase/rerank', async (body) => {
