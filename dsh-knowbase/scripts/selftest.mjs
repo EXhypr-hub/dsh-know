@@ -1567,8 +1567,9 @@ await test('版本适配：客户端降级', async () => {
   }
 
   // 声明方式：engines.dsh 是 DSH 真正读取的字段
-  if (pkg.engines?.dsh !== '>=0.1.7-rc.2') {
-    throw new Error(`engines.dsh 声明不对：${pkg.engines?.dsh}`)
+  // （具体覆盖范围由「engines 覆盖所有预发布版」那条测试把关）
+  if (!/^>=0\.1\.7-rc\.2/.test(pkg.engines?.dsh ?? '')) {
+    throw new Error(`engines.dsh 最低版本不对：${pkg.engines?.dsh}`)
   }
   // 无效字段必须已清理
   if (pkg.dsh?.compatibility !== undefined) {
@@ -1579,6 +1580,46 @@ await test('版本适配：客户端降级', async () => {
   if (!/compatibility: \{/.test(host)) throw new Error('status 没有暴露兼容信息')
 
   ok('版本适配：客户端降级', 'engines.dsh 已声明，slot 缺失时早退，无无效字段')
+})
+
+await test('版本适配：engines 覆盖所有预发布版', async () => {
+  const { readFileSync } = await import('node:fs')
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const semver = (await import('semver')).default
+
+  const range = pkg.engines?.dsh
+  if (!range) throw new Error('缺少 engines.dsh')
+
+  /*
+   * node-semver 的陷阱：预发布版本只有当范围里存在「与之 major.minor.patch
+   * 完全一致、且自身带预发布标签」的比较符时才会被放行。
+   * 所以单段 '>=0.1.7-rc.2' 匹配不到 0.2.x 的任何 rc 版本，
+   * 包括当前运行的 0.2.2-rc.3 —— 必须为每条预发布线各写一个分支。
+   */
+  const mustMatch = [
+    '0.1.7-rc.2',   // 声明的最低版本
+    '0.2.0-rc.2',
+    '0.2.1-rc.1',
+    '0.2.1-rc.2',
+    '0.2.2-rc.1',
+    '0.2.2-rc.3',   // 当前运行
+    '0.2.2',        // 正式版
+    '0.3.0',
+  ]
+  const missed = mustMatch.filter((v) => !semver.satisfies(v, range))
+  if (missed.length) {
+    throw new Error(
+      `engines.dsh 匹配不到这些版本：${missed.join(', ')}。`
+      + '预发布版需要显式分支，例如 ">=0.1.7-rc.2 || >=0.2.0-rc.2 || …"',
+    )
+  }
+
+  // 单段写法是典型的错误，确保没退回去
+  if (!range.includes('||')) {
+    throw new Error('engines.dsh 只有一段，会静默排除所有更高的预发布版')
+  }
+
+  ok('版本适配：engines 覆盖所有预发布版', `覆盖 ${mustMatch.length} 个版本，含当前 0.2.2-rc.3`)
 })
 
 /* ───────────────── 收尾 ───────────────── */
