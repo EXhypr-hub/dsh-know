@@ -225,6 +225,8 @@ class KnowledgeBase {
     this.importing = new Map()
     /** 可中断的长任务：id → { controller, state, done, total } */
     this.tasks = new Map()
+    /** OCR 引擎缓存 */
+    this.ocrCache = null
     this.apiKeyCache = ''
     this.embedderCache = null
     this.rerankerCache = null
@@ -501,9 +503,12 @@ class KnowledgeBase {
       capabilities: {
         ingest: this.ready,
         search: this.ready,
-        rerank: false,
-        ocr: false,
-        fetch: false,
+        // 重排/OCR/抓取都按「当前配置是否真的可用」报告，
+        // 而不是写死 false——否则界面无法反映真实状态
+        rerank: this.getRerankConfig().provider !== 'none',
+        ocr: this.getOcrConfig().provider !== 'none',
+        fetch: this.getFetchConfig().enabled,
+        localRerank: this.getRerankConfig().provider === 'local',
       },
     }
   }
@@ -603,11 +608,46 @@ class KnowledgeBase {
     try {
       const extracted = await extractDocument(buffer, ext)
 
-      // 扫描件：存下来但标记需要 OCR
+      // 扫描件：OCR 开着就当场识别，否则标记待处理
       if (extracted.scanned) {
         await this.store.saveFile(sha256, ext, buffer)
+
+        const ocrConfig = this.getOcrConfig()
+        if (ocrConfig.provider !== 'none' && ext === 'pdf') {
+          try {
+            this.store.updateDocumentStatus(docId, 'processing', { chunkCount: 0 })
+            const ocrText = await this.#ocrPdf(buffer, docId)
+            if (ocrText.trim() !== '') {
+              const ocrChunks = chunkSections([{ text: ocrText }])
+              if (ocrChunks.length > 0) {
+                this.store.replaceChunks(docId, ocrChunks)
+                this.store.updateDocumentStatus(docId, 'ready', {
+                  pageCount: extracted.meta?.pages ?? null,
+                  chunkCount: ocrChunks.length,
+                  error: null,
+                })
+                return { documentId: docId, scanned: true, ocr: true, chunkCount: ocrChunks.length }
+              }
+            }
+            // OCR 没认出字：退回待处理，并说明原因
+            this.store.updateDocumentStatus(docId, 'needs-ocr', {
+              error: 'OCR 已执行但没有识别出文字，可能是空白页或图片质量太低',
+              pageCount: extracted.meta?.pages ?? null,
+              chunkCount: 0,
+            })
+            return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
+          } catch (error) {
+            this.store.updateDocumentStatus(docId, 'needs-ocr', {
+              error: `OCR 失败：${error instanceof Error ? error.message : String(error)}`,
+              pageCount: extracted.meta?.pages ?? null,
+              chunkCount: 0,
+            })
+            return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
+          }
+        }
+
         this.store.updateDocumentStatus(docId, 'needs-ocr', {
-          error: '该 PDF 没有文字层（扫描件），需要启用 OCR 才能抽取内容',
+          error: '该 PDF 没有文字层（扫描件）。到「OCR 设置」里开启识别，或在文档行点「重新解析」重试',
           pageCount: extracted.meta?.pages ?? null,
           chunkCount: 0,
         })
@@ -696,6 +736,7 @@ class KnowledgeBase {
         dimension: 0,
         dtype: 'q8',      // q8 / q4 / fp16 / fp32
         threads: 0,       // 0 = 交给运行时决定
+        device: 'cpu',    // cpu / dml（实测 dml 更慢，默认 cpu）
       },
       /** 首次引导是否已完成 */
       onboarded: false,
@@ -1094,6 +1135,101 @@ class KnowledgeBase {
     if (signal?.aborted) {
       const error = new Error(`${what}已取消`)
       error.code = 'ABORTED'
+      throw error
+    }
+  }
+
+  /* ────────────────────── OCR ────────────────────── */
+
+  /** 读取 OCR 配置 */
+  getOcrConfig() {
+    const stored = this.store.getSetting('ocr', null)
+    const defaults = {
+      provider: 'none',      // none | vision | ocr-api
+      style: 'openai',       // openai | ocr-endpoint
+      baseUrl: '',
+      model: '',
+      maxPages: 10,
+      scale: 2,
+      timeoutMs: 90000,
+      language: '中英混合',
+    }
+    if (!stored) return defaults
+    return { ...defaults, ...stored }
+  }
+
+  /** 保存 OCR 配置 */
+  setOcrConfig(patch) {
+    const current = this.getOcrConfig()
+    // apiKey 单独处理，不进 settings
+    const { apiKey, ...rest } = patch ?? {}
+    const next = { ...current, ...rest }
+    this.store.setSetting('ocr', next)
+    if (typeof apiKey === 'string') this.store.setSetting('ocrKey', apiKey)
+    this.ocrCache = null
+    return next
+  }
+
+  /** 当前是否已存 OCR Key（不返回明文） */
+  hasOcrKey() {
+    const key = this.store.getSetting('ocrKey', '')
+    return typeof key === 'string' && key.trim() !== ''
+  }
+
+  /** 造一个 OCR 实例 */
+  async ocrEngine() {
+    const config = this.getOcrConfig()
+    if (config.provider === 'none') return null
+    const cacheKey = `ocr|${JSON.stringify(config)}|${this.store.getSetting('ocrKey', '')}`
+    if (this.ocrCache?.key === cacheKey) return this.ocrCache.engine
+
+    const { VisionOcr } = await import('./lib/ocr.js')
+    const engine = new VisionOcr({
+      ...config,
+      apiKey: this.store.getSetting('ocrKey', ''),
+    })
+    this.ocrCache = { key: cacheKey, engine }
+    return engine
+  }
+
+  /** 测试 OCR：造一张小图跑一遍 */
+  async testOcr(patch) {
+    if (patch) this.setOcrConfig(patch)
+    const engine = await this.ocrEngine()
+    if (!engine) throw new Error('尚未配置 OCR 服务')
+    return engine.test()
+  }
+
+  /** 内部：把一个 PDF 交给 OCR，返回拼接后的文本 */
+  async #ocrPdf(buffer, docId) {
+    const config = this.getOcrConfig()
+    const engine = await this.ocrEngine()
+    if (!engine) throw new Error('OCR 未配置')
+
+    const task = this.createTask(`OCR 识别`, 0)
+    try {
+      const { renderPdfPages } = await import('./lib/ocr.js')
+      const pages = await renderPdfPages(buffer, {
+        maxPages: config.maxPages,
+        scale: config.scale,
+        signal: task.controller.signal,
+        onProgress: (page, total) => this.touchTask(task, { done: page, total }),
+      })
+
+      const parts = []
+      for (const page of pages) {
+        this.throwIfAborted(task.controller.signal, 'OCR')
+        const text = await engine.recognizeImage(page.png, { signal: task.controller.signal })
+        if (text.trim() !== '') {
+          parts.push(`【第 ${page.page} 页】\n${text}`)
+        }
+        this.touchTask(task, { done: page.page })
+      }
+
+      this.settleTask(task, 'done')
+      return parts.join('\n\n')
+    } catch (error) {
+      this.settleTask(task, 'failed', error)
       throw error
     }
   }
@@ -1740,6 +1876,24 @@ export function apply(ctx, config) {
           elapsedMs: Date.now() - state.startedAt,
         },
       })
+    })
+
+    /* ── OCR ── */
+    route('/api/dsh-knowbase/ocr', async (body) => {
+      if (body.action === 'get') {
+        return json({
+          ok: true,
+          value: { ...kb.getOcrConfig(), hasKey: kb.hasOcrKey() },
+        })
+      }
+      if (body.action === 'set') {
+        const value = kb.setOcrConfig(body.config ?? {})
+        return json({ ok: true, value: { ...value, hasKey: kb.hasOcrKey() } })
+      }
+      if (body.action === 'test') {
+        return json({ ok: true, value: await kb.testOcr(body.config) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
     /* ── 导出与数据目录 ── */

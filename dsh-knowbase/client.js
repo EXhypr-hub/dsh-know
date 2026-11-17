@@ -1749,6 +1749,15 @@ window.__ModuleLoader__.load({
                     h(FetchPanel, null),
                   ),
 
+                  /* OCR 设置 */
+                  h('section', { className: 'kb-section' },
+                    h('div', { className: 'kb-section-head' },
+                      h('h2', { className: 'kb-section-title' }, 'OCR 设置'),
+                      h('span', { className: 'kb-section-meta' }, '让扫描版 PDF 也能被检索'),
+                    ),
+                    h(OcrPanel, { onChanged: () => refreshStatus() }),
+                  ),
+
                   /* 存储与清理 */
                   h('section', { className: 'kb-section' },
                     h('div', { className: 'kb-section-head' },
@@ -2634,6 +2643,22 @@ window.__ModuleLoader__.load({
             h('div', { className: 'kb-field-hint' },
               '0 = 交给运行时决定。机器卡顿时调小，比如 4。'),
           ),
+
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, '推理设备'),
+            h('select', {
+              className: 'kb-select',
+              value: config.local.device ?? 'cpu',
+              onChange: (e) => patchLocal({ device: e.target.value }),
+            },
+              h('option', { value: 'cpu' }, 'CPU（实测更快，推荐）'),
+              h('option', { value: 'dml' }, 'GPU — DirectML（实测更慢，仅供试验）'),
+            ),
+            h('div', { className: 'kb-field-hint' },
+              '本机实测：CPU 3.0ms/句，DirectML 10.1ms/句。'
+              + '单条短文本推理时，显存搬运开销大于计算收益，所以默认 CPU——'
+              + '选 dml 只会更慢，不建议。'),
+          ),
         ),
 
         /* 模型列表 */
@@ -3059,6 +3084,161 @@ window.__ModuleLoader__.load({
     }
 
     /* ══════════════════════════ 抓取设置结束 ══════════════════════════ */
+
+    /* ══════════════════════════ OCR 设置 ══════════════════════════ */
+
+    function OcrPanel({ onChanged }) {
+      const t = useT()
+      const [config, setConfig] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [message, setMessage] = useState(null)
+
+      const load = useCallback(async () => {
+        try {
+          setConfig(await api('ocr', { action: 'get' }))
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const patch = useCallback((p) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, ...p }))
+      }, [])
+
+      const save = useCallback(async () => {
+        setBusy('save')
+        setMessage(null)
+        try {
+          const next = await api('ocr', { action: 'set', config })
+          setConfig(next)
+          setMessage({ kind: 'ok', text: '已保存' })
+          onChanged?.()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, onChanged])
+
+      const test = useCallback(async () => {
+        setBusy('test')
+        setMessage(null)
+        try {
+          const result = await api('ocr', { action: 'test', config })
+          setMessage({
+            kind: result.recognized ? 'ok' : 'warn',
+            text: result.recognized
+              ? `识别成功 · 耗时 ${result.ms}ms · 认出「${result.sample}」`
+              : `连上了，但没认出测试图里的文字（返回：${result.sample || '空'}）。模型可能不支持图片输入。`,
+          })
+          await load()
+        } catch (err) {
+          setMessage({ kind: 'err', text: err.message })
+        } finally {
+          setBusy('')
+        }
+      }, [config, load])
+
+      if (config === null) return h('div', { className: 'kb-notice' }, t('common.loading'))
+
+      const off = config.provider === 'none'
+
+      return h('div', null,
+        message
+          ? h('div', { className: `kb-notice${message.kind === 'err' ? ' kb-notice-err' : ''} kb-fade-in` }, message.text)
+          : null,
+
+        h('div', { className: 'kb-field' },
+          h('label', { className: 'kb-field-label' }, 'OCR 方式'),
+          h('select', {
+            className: 'kb-select',
+            value: config.provider,
+            onChange: (e) => patch({ provider: e.target.value }),
+          },
+            h('option', { value: 'none' }, '不使用（扫描件只入库不入文）'),
+            h('option', { value: 'vision' }, '视觉模型 API（推荐，中文效果好）'),
+            h('option', { value: 'ocr-api' }, '专用 OCR 接口'),
+          ),
+          h('div', { className: 'kb-field-hint' },
+            off
+              ? '关闭时，扫描版 PDF 会被标记为「需 OCR」，内容不会被抽取。'
+              : '开启后，扫描页的**图片**会发往你填的服务。这是识别的前提，请确认接受。'),
+        ),
+
+        off ? null : h(React.Fragment, null,
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, '服务地址'),
+            h('input', {
+              className: 'kb-input',
+              placeholder: 'https://api.siliconflow.cn/v1',
+              value: config.baseUrl,
+              onChange: (e) => patch({ baseUrl: e.target.value }),
+            }),
+            h('div', { className: 'kb-field-hint' },
+              '填到 /v1 为止。视觉模型会拼上 /chat/completions，专用接口会拼上 /ocr。'),
+          ),
+
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, '模型名'),
+            h('input', {
+              className: 'kb-input',
+              placeholder: '例如 Qwen/Qwen2-VL-7B-Instruct',
+              value: config.model,
+              onChange: (e) => patch({ model: e.target.value }),
+            }),
+            h('div', { className: 'kb-field-hint' },
+              '必须是支持图片输入的模型，纯文本模型会失败。'),
+          ),
+
+          h('div', { className: 'kb-field' },
+            h('label', { className: 'kb-field-label' }, 'API Key'),
+            h('input', {
+              className: 'kb-input',
+              type: 'password',
+              placeholder: config.hasKey ? '已保存（留空不修改）' : '粘贴 Key',
+              value: config.apiKey ?? '',
+              onChange: (e) => patch({ apiKey: e.target.value }),
+            }),
+          ),
+
+          h('div', { className: 'kb-grid2' },
+            h('div', { className: 'kb-field' },
+              h('label', { className: 'kb-field-label' }, '单次最多识别页数'),
+              h('input', {
+                className: 'kb-input',
+                type: 'number',
+                min: 1, max: 20,
+                value: config.maxPages,
+                onChange: (e) => patch({ maxPages: Number(e.target.value) || 10 }),
+              }),
+              h('div', { className: 'kb-field-hint' }, '每页是一次 API 调用，别一次开太大。'),
+            ),
+            h('div', { className: 'kb-field' },
+              h('label', { className: 'kb-field-label' }, '渲染清晰度'),
+              h('input', {
+                className: 'kb-input',
+                type: 'number',
+                min: 1, max: 3, step: 0.5,
+                value: config.scale,
+                onChange: (e) => patch({ scale: Number(e.target.value) || 2 }),
+              }),
+              h('div', { className: 'kb-field-hint' }, '越大越清楚，也越慢越贵。2 通常够用。'),
+            ),
+          ),
+        ),
+
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+          h('button', { className: 'kb-btn', disabled: busy !== '', onClick: save },
+            busy === 'save' ? t('common.saving') : t('common.save')),
+          off ? null : h('button', { className: 'kb-btn', disabled: busy !== '', onClick: test },
+            busy === 'test' ? t('common.testing') : '测试识别'),
+        ),
+      )
+    }
+
+    /* ══════════════════════════ OCR 设置结束 ══════════════════════════ */
 
     /* ══════════════════════════ 参数校验 ══════════════════════════ */
 

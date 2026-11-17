@@ -950,6 +950,72 @@ await test('下载完整性校验', async () => {
   ok('下载完整性校验', '读取 etag 比对 sha256，不符则换镜像重试')
 })
 
+await test('OCR 配置与扫描件判定', async () => {
+  const { resolveOcrConfig, looksScanned, MAX_OCR_PAGES } = await import('../lib/ocr.js')
+
+  // 配置归一化
+  const cfg = resolveOcrConfig({ provider: 'vision', baseUrl: 'https://x/v1/', model: 'm' })
+  if (cfg.provider !== 'vision') throw new Error('provider 未接受')
+  if (cfg.baseUrl !== 'https://x/v1') throw new Error('尾部斜杠未去掉')
+
+  const bad = resolveOcrConfig({ provider: '乱写' })
+  if (bad.provider !== 'none') throw new Error('非法 provider 未回落')
+
+  // 上限必须被夹住，否则用户填 999 会烧光额度
+  const clamped = resolveOcrConfig({ provider: 'vision', maxPages: 999 })
+  if (clamped.maxPages !== MAX_OCR_PAGES) throw new Error(`maxPages 未夹到上限：${clamped.maxPages}`)
+  const low = resolveOcrConfig({ provider: 'vision', maxPages: 0 })
+  if (low.maxPages !== 1) throw new Error('maxPages 下界未生效')
+
+  // 扫描件判定
+  if (!looksScanned({ textLength: 10, pageCount: 30 })) throw new Error('扫描件未识别')
+  if (looksScanned({ textLength: 20000, pageCount: 30 })) throw new Error('正常 PDF 被误判成扫描件')
+  if (looksScanned({ textLength: 0, pageCount: 1 })) throw new Error('单页图片不该当扫描件')
+
+  ok('OCR 配置与扫描件判定', `上限 ${MAX_OCR_PAGES} 页，判定阈值正确`)
+})
+
+await test('PDF 页面渲染', async () => {
+  const { renderPdfPages } = await import('../lib/ocr.js')
+  const { readFileSync, existsSync } = await import('node:fs')
+
+  const candidate = 'C:/Users/34096/Desktop/111/生涯发展报告-游戏开发工程师.pdf'
+  if (!existsSync(candidate)) {
+    ok('PDF 页面渲染', '（跳过：测试 PDF 不存在）')
+    return
+  }
+
+  const started = Date.now()
+  const pages = await renderPdfPages(readFileSync(candidate), { maxPages: 1, scale: 1.5 })
+  const ms = Date.now() - started
+
+  if (pages.length !== 1) throw new Error(`应渲染 1 页，实际 ${pages.length}`)
+  if (!pages[0].png || pages[0].png.length < 5000) {
+    throw new Error(`PNG 太小，可能渲染失败（${pages[0].png?.length ?? 0} bytes）`)
+  }
+  // PNG 魔数校验
+  const magic = pages[0].png.subarray(0, 8).toString('hex')
+  if (magic !== '89504e470d0a1a0a') throw new Error('输出不是合法 PNG')
+
+  ok('PDF 页面渲染', `1 页 ${ms}ms，PNG ${Math.round(pages[0].png.length / 1024)}KB`)
+})
+
+await test('推理设备默认 CPU', async () => {
+  const { readFileSync } = await import('node:fs')
+  const embedLocal = readFileSync(new URL('../lib/embed-local.js', import.meta.url), 'utf8')
+
+  // 默认必须是 cpu——实测 DirectML 更慢，不能默认开
+  if (!/this\.device = config\?\.device === 'dml' \? 'dml' : 'cpu'/.test(embedLocal)) {
+    throw new Error('device 默认值不是 cpu')
+  }
+  // 实测结论必须写进代码，避免以后有人"优化"成默认 GPU
+  if (!embedLocal.includes('10.1ms') || !embedLocal.includes('3.0ms')) {
+    throw new Error('缺少实测数据注释，后人会误以为 GPU 更快')
+  }
+
+  ok('推理设备默认 CPU', 'DirectML 实测更慢的结论已写入代码注释')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

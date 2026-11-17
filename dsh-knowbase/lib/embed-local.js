@@ -29,6 +29,8 @@ export class LocalEmbedder {
     this.dtype = ['q8', 'q4', 'fp16', 'fp32'].includes(config?.dtype) ? config.dtype : 'q8'
     /** 推理线程数；0 或未填表示交给运行时决定 */
     this.threads = Number.isFinite(Number(config?.threads)) ? Number(config.threads) : 0
+    /** 推理设备：cpu（默认）或 dml（DirectML，实测更慢，仅作可选） */
+    this.device = config?.device === 'dml' ? 'dml' : 'cpu'
     this.mirror = MIRROR_HOSTS[config?.mirror] ? config.mirror : 'hf-mirror'
     this.dimension = Number(config?.dimension ?? 0)
     this.pipeline = null
@@ -129,6 +131,19 @@ export class LocalEmbedder {
         }
       }
 
+      /*
+       * 推理设备。
+       *
+       * 本机实测（RTX 5060 Laptop 8GB，onnxruntime-node 1.30 自带 DirectML）：
+       *   bge-small-zh（23M）  CPU 3.0ms/句  vs  DML 10.1ms/句   → DML 慢 3.4 倍
+       *   bge-reranker（568M） CPU 9.6ms/次  vs  DML 34.0ms/次   → DML 慢 3.5 倍
+       *
+       * 原因是本插件做的是「单条短文本推理」，batch=1，
+       * GPU 的显存搬运开销远超计算收益；量化模型在 CPU 上也有良好优化。
+       * 所以默认 cpu，dml 只作为「用户想自己试」的开关保留，不当作卖点。
+       */
+      const device = this.device === 'dml' ? 'dml' : 'cpu'
+
       // 决定从哪里加载模型：
       //   1. 用户手动指定的目录
       //   2. 下载器已经下好的 models/<id>
@@ -142,6 +157,7 @@ export class LocalEmbedder {
        */
       const extractor = await pipeline('feature-extraction', source, {
         dtype: this.dtype === 'q8' ? 'q8' : this.dtype,
+        device,
         progress_callback: (event) => {
           if (event?.status === 'progress' && typeof event.progress === 'number') {
             onProgress?.(event.file ?? '', Math.round(event.progress))
