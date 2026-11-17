@@ -1116,6 +1116,86 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ══════════════════════════ 服务商预设 ══════════════════════════ */
+
+    /**
+     * 内置常见嵌入服务商。选一个就自动填好地址与模型名，
+     * 用户只需贴 Key；想用别家就选「自定义」自己填。
+     */
+    const EMBED_PROVIDERS = [
+      { id: 'custom', label: '自定义…', baseUrl: '', model: '', hint: '' },
+      {
+        id: 'siliconflow',
+        label: '硅基流动 SiliconFlow',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        model: 'BAAI/bge-m3',
+        hint: '国内直连快，注册送额度。bge-m3 支持中英文，1024 维。',
+        keyUrl: 'https://cloud.siliconflow.cn/account/ak',
+      },
+      {
+        id: 'deepseek',
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        model: 'deepseek-embedding',
+        hint: '注意：DeepSeek 目前未公开嵌入接口，此项仅供参考，如无对应模型请改用别家。',
+      },
+      {
+        id: 'openai',
+        label: 'OpenAI',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'text-embedding-3-small',
+        hint: '国内可能需要代理。3-small 1536 维，便宜。',
+        keyUrl: 'https://platform.openai.com/api-keys',
+      },
+      {
+        id: 'dashscope',
+        label: '阿里云百炼',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        model: 'text-embedding-v3',
+        hint: '通义千问系列，国内稳定。',
+        keyUrl: 'https://bailian.console.aliyun.com/',
+      },
+      {
+        id: 'zhipu',
+        label: '智谱 AI',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        model: 'embedding-3',
+        hint: '国内可用。',
+        keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
+      },
+      {
+        id: 'ollama',
+        label: '本地 Ollama',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'bge-m3',
+        hint: '完全本地，需先装 Ollama 并 pull 模型：ollama pull bge-m3。无需 Key。',
+      },
+      {
+        id: 'lmstudio',
+        label: '本地 LM Studio',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+        model: 'text-embedding-nomic-embed-text-v1.5',
+        hint: '完全本地，LM Studio 里加载嵌入模型后启动服务端。无需 Key。',
+      },
+      {
+        id: 'xinference',
+        label: '本机 Xinference',
+        baseUrl: 'http://127.0.0.1:9997/v1',
+        model: 'bge-m3',
+        hint: '本地部署推理框架，需自行启动。无需 Key。',
+      },
+    ]
+
+    /** 根据地址反查匹配的服务商（用于回显下拉框） */
+    function providerOfBaseUrl(baseUrl) {
+      const normalized = String(baseUrl ?? '').trim().replace(/\/+$/, '')
+      if (!normalized) return 'custom'
+      const hit = EMBED_PROVIDERS.find(
+        (p) => p.id !== 'custom' && p.baseUrl.replace(/\/+$/, '') === normalized,
+      )
+      return hit ? hit.id : 'custom'
+    }
+
     /* ══════════════════════════ 设置面板 ══════════════════════════ */
 
     function SettingsPanel({ collectionId, onChanged }) {
@@ -1125,12 +1205,14 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [message, setMessage] = useState(null)
       const [building, setBuilding] = useState(null)
+      const [providerId, setProviderId] = useState('custom')
 
       const load = useCallback(async () => {
         try {
           const value = await api('embed', { action: 'get', collectionId })
           setConfig(value)
           setEmbedStatus(value.status)
+          setProviderId(providerOfBaseUrl(value.api?.baseUrl))
         } catch (err) {
           setMessage({ kind: 'err', text: err.message })
         }
@@ -1138,21 +1220,56 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { load() }, [load])
 
-      const patchConfig = (patch) => setConfig((cur) => ({
-        ...cur,
-        ...patch,
-        api: { ...cur.api, ...(patch.api ?? {}) },
-      }))
+      /*
+       * 关键修复：用函数式更新读取最新状态再合并。
+       * 之前直接用外层 config 变量，连续输入时拿到的是旧快照，
+       * 导致后输入的字段覆盖掉先输入的字段（模型名被清空就是这么来的）。
+       */
+      const patchApi = useCallback((patch) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, api: { ...cur.api, ...patch } }))
+      }, [])
 
-      const save = useCallback(async (extra = {}) => {
+      const patchLocal = useCallback((patch) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, local: { ...cur.local, ...patch } }))
+      }, [])
+
+      const patchProvider = useCallback((id) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, provider: id }))
+      }, [])
+
+      /** 选择服务商预设：一键填好地址与模型 */
+      const chooseProvider = useCallback((id) => {
+        setProviderId(id)
+        const preset = EMBED_PROVIDERS.find((p) => p.id === id)
+        if (!preset || id === 'custom') return
+        setConfig((cur) => (cur === null ? cur : {
+          ...cur,
+          api: { ...cur.api, baseUrl: preset.baseUrl, model: preset.model },
+        }))
+      }, [])
+
+      const currentPreset = EMBED_PROVIDERS.find((p) => p.id === providerId)
+
+      /** 把当前状态整理成后端要的形状 */
+      const snapshot = useCallback(() => ({
+        provider: config.provider,
+        api: {
+          baseUrl: config.api.baseUrl,
+          model: config.api.model,
+          dimension: config.api.dimension,
+          batchSize: config.api.batchSize,
+        },
+        local: { modelDir: config.local.modelDir },
+      }), [config])
+
+      const save = useCallback(async () => {
         setBusy('save')
         setMessage(null)
         try {
           await api('embed', {
             action: 'set',
-            config: { provider: config.provider, api: config.api, local: config.local },
+            config: snapshot(),
             ...(apiKey !== '' ? { apiKey } : {}),
-            ...extra,
           })
           setApiKey('')
           await load()
@@ -1163,7 +1280,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy('')
         }
-      }, [config, apiKey, load, onChanged])
+      }, [snapshot, apiKey, load, onChanged])
 
       const test = useCallback(async () => {
         setBusy('test')
@@ -1171,13 +1288,13 @@ window.__ModuleLoader__.load({
         try {
           await api('embed', {
             action: 'set',
-            config: { provider: config.provider, api: config.api, local: config.local },
+            config: snapshot(),
             ...(apiKey !== '' ? { apiKey } : {}),
           })
           const result = await api('embed', { action: 'test' })
           setMessage({
             kind: 'ok',
-            text: `连接成功 · 维度 ${result.dimension} 维 · 耗时 ${result.ms}ms`,
+            text: `连接成功 · ${result.dimension} 维 · 耗时 ${result.ms}ms`,
           })
           setApiKey('')
           await load()
@@ -1187,7 +1304,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy('')
         }
-      }, [config, apiKey, load, onChanged])
+      }, [snapshot, apiKey, load, onChanged])
 
       const buildIndex = useCallback(async () => {
         setBusy('build')
@@ -1232,55 +1349,90 @@ window.__ModuleLoader__.load({
         /* 嵌入方式 */
         h('div', { className: 'kb-field' },
           h('label', { className: 'kb-field-label' }, '嵌入方式'),
-          h('div', { className: 'kb-field-row' },
-            h('select', {
-              className: 'kb-select',
-              value: config.provider,
-              onChange: (e) => patchConfig({ provider: e.target.value }),
-            },
-              h('option', { value: 'none' }, '不使用（仅关键词检索）'),
-              h('option', { value: 'api' }, 'OpenAI 兼容 API'),
-              h('option', { value: 'local' }, '本地模型（P3 提供）'),
-            ),
+          h('select', {
+            className: 'kb-select',
+            value: config.provider,
+            onChange: (e) => patchProvider(e.target.value),
+          },
+            h('option', { value: 'none' }, '不使用（仅关键词检索）'),
+            h('option', { value: 'api' }, 'API / 本地服务（OpenAI 兼容）'),
+            h('option', { value: 'local' }, '本地模型文件（P3 提供）'),
           ),
         ),
 
         config.provider === 'api'
           ? h(React.Fragment, null,
+
+              /* 服务商预设 */
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '服务商'),
+                h('select', {
+                  className: 'kb-select',
+                  value: providerId,
+                  onChange: (e) => chooseProvider(e.target.value),
+                },
+                  EMBED_PROVIDERS.map((p) => h('option', { key: p.id, value: p.id }, p.label)),
+                ),
+                currentPreset?.hint
+                  ? h('div', { className: 'kb-field-hint' }, currentPreset.hint)
+                  : h('div', { className: 'kb-field-hint' },
+                      '选一个服务商可自动填好地址与模型；也可以自己填任意 OpenAI 兼容地址。'),
+              ),
+
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' }, '服务地址'),
                 h('input', {
                   className: 'kb-input',
                   placeholder: 'https://api.example.com/v1',
                   value: config.api.baseUrl,
-                  onChange: (e) => patchConfig({ api: { baseUrl: e.target.value } }),
+                  onChange: (e) => {
+                    patchApi({ baseUrl: e.target.value })
+                    setProviderId(providerOfBaseUrl(e.target.value))
+                  },
                 }),
                 h('div', { className: 'kb-field-hint' }, '填到 /v1 为止，插件会拼上 /embeddings'),
               ),
+
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' }, '模型名'),
                 h('input', {
                   className: 'kb-input',
-                  placeholder: 'text-embedding-3-small',
+                  placeholder: '例如 BAAI/bge-m3',
                   value: config.api.model,
-                  onChange: (e) => patchConfig({ api: { model: e.target.value } }),
+                  onChange: (e) => patchApi({ model: e.target.value }),
                 }),
+                h('div', { className: 'kb-field-hint' },
+                  '写服务商文档里的模型标识，大小写与斜杠要一致。'),
               ),
+
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' },
                   'API Key',
-                  config.api.hasKey ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 8 } }, '已保存') : null,
+                  config.api.hasKey
+                    ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 8 } }, '已保存')
+                    : null,
                 ),
                 h('input', {
                   className: 'kb-input',
                   type: 'password',
-                  placeholder: config.api.hasKey ? '已保存，留空则不修改' : '粘贴 API Key',
+                  placeholder: config.api.hasKey ? '已保存，留空则不修改' : '粘贴 API Key（本地服务可留空）',
                   value: apiKey,
                   onChange: (e) => setApiKey(e.target.value),
                 }),
                 h('div', { className: 'kb-field-hint' },
-                  'Key 存在 DSH 凭据库或数据目录的 secrets.json，不会写进设置文件'),
+                  currentPreset?.keyUrl
+                    ? h('span', null,
+                        '获取 Key：',
+                        h('a', {
+                          href: currentPreset.keyUrl,
+                          target: '_blank',
+                          rel: 'noreferrer',
+                          style: { color: 'var(--dsw-alias-brand-primary)' },
+                        }, currentPreset.keyUrl),
+                        ' · 存在凭据库或 secrets.json，不写进设置文件')
+                    : '存在 DSH 凭据库或数据目录的 secrets.json，不会写进设置文件'),
               ),
+
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' }, '批大小'),
                 h('input', {
@@ -1288,9 +1440,9 @@ window.__ModuleLoader__.load({
                   type: 'number',
                   min: 1, max: 64,
                   value: config.api.batchSize,
-                  onChange: (e) => patchConfig({ api: { batchSize: Number(e.target.value) } }),
+                  onChange: (e) => patchApi({ batchSize: Number(e.target.value) || 16 }),
                 }),
-                h('div', { className: 'kb-field-hint' }, '一次请求发送多少条文本，默认 16'),
+                h('div', { className: 'kb-field-hint' }, '一次请求发送多少条文本，默认 16，太大可能被限流'),
               ),
             )
           : null,
@@ -1300,7 +1452,7 @@ window.__ModuleLoader__.load({
           h('button', {
             className: 'kb-btn',
             disabled: busy !== '',
-            onClick: () => save(),
+            onClick: save,
           }, busy === 'save' ? '保存中…' : '保存'),
 
           config.provider === 'api'
@@ -1324,7 +1476,7 @@ window.__ModuleLoader__.load({
           : null,
 
         h('div', { className: 'kb-field-hint', style: { marginTop: 12 } },
-          '提示：换嵌入模型后向量维度会变，旧索引不能混用，需要重新点「建立向量索引」。'),
+          '换嵌入模型后向量维度会变，旧索引不能混用，需要重新点「建立向量索引」。'),
       )
     }
 
