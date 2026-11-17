@@ -1199,11 +1199,37 @@ window.__ModuleLoader__.load({
 }
 .kb-check input { accent-color: var(--dsw-alias-brand-primary); }
 
+/* 测速结果：单独一行，窄抽屉里也看得见 */
 .kb-bench {
-  font-size: 11px;
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  animation: kb-fade-in 200ms ease both;
+}
+.kb-bench-main { font-weight: 600; }
+.kb-bench-detail {
   color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
+.kb-bench-ok {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent);
+  color: var(--dsw-alias-label-primary);
+}
+.kb-bench-ok .kb-bench-main { color: var(--dsw-alias-brand-primary); }
+.kb-bench-warn {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+}
+.kb-bench-warn .kb-bench-main { color: var(--dsw-alias-state-warn-primary); }
+.kb-bench-err {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-danger-primary, #e5484d) 40%, transparent);
+}
+.kb-bench-err .kb-bench-main { color: var(--dsw-alias-state-danger-primary, #e5484d); }
 
 .kb-langs { display: flex; flex-direction: column; gap: 6px; }
 .kb-lang {
@@ -3186,14 +3212,24 @@ window.__ModuleLoader__.load({
             provider: config.provider,
             local: config.local,
           })
-          const cpu = result.results.find((r) => r.device === 'cpu' && r.ok)
-          const dml = result.results.find((r) => r.device === 'dml' && r.ok)
-          const parts = []
-          if (cpu) parts.push('CPU ' + cpu.perMs + 'ms/句')
-          if (dml) parts.push('DirectML ' + dml.perMs + 'ms/句')
-          setBenchResult(parts.join(' · ') + (result.verdict ? ' → ' + result.verdict.summary : ''))
+
+          // 结论放最前面，数字放后面——用户要的是「选哪个」，不是两个毫秒数
+          const cpu = result.results?.find((r) => r.device === 'cpu' && r.ok)
+          const dml = result.results?.find((r) => r.device === 'dml' && r.ok)
+          const nums = []
+          if (cpu) nums.push(`CPU ${cpu.perMs}ms`)
+          if (dml) nums.push(`GPU ${dml.perMs}ms`)
+
+          const verdict = result.verdict?.summary ?? '测速完成，但没能得出结论'
+          const faster = result.verdict?.faster
+
+          setBenchResult({
+            kind: faster === null || faster === undefined ? 'warn' : 'ok',
+            text: verdict,
+            detail: nums.length > 0 ? `（实测：${nums.join(' / ')}）` : '',
+          })
         } catch (err) {
-          setBenchResult('测速失败：' + err.message)
+          setBenchResult({ kind: 'err', text: '测速失败：' + err.message, detail: '' })
         } finally {
           setBench('')
         }
@@ -3423,16 +3459,28 @@ window.__ModuleLoader__.load({
             h('div', { className: 'kb-field-hint' },
               '单条短文本推理时，显存搬运开销常大于计算收益，所以在很多机器上 CPU 更快。'
               + '但换机器、换模型结果可能不同——点下面的按钮，用你自己这台的真实数字来定。'),
+            /*
+             * 测速结果单独占一行。
+             * 原来放在按钮右边的 flex 行里，抽屉一窄就被挤出可视区，
+             * 用户点了按钮什么都看不到。
+             */
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 } },
               h('button', {
                 className: 'kb-btn kb-btn-sm',
                 disabled: bench !== '',
                 onClick: runBench,
-              }, bench === 'run' ? '测速中…' : '测一下 CPU 和 GPU 哪个快'),
-              benchResult
-                ? h('span', { className: 'kb-bench' }, benchResult)
-                : null,
+              }, bench === 'run' ? '测速中…（首次要加载模型，稍等）' : '测一下 CPU 和 GPU 哪个快'),
             ),
+            benchResult
+              ? h('div', {
+                  className: `kb-bench kb-bench-${benchResult.kind ?? 'ok'}`,
+                },
+                  h('span', { className: 'kb-bench-main' }, benchResult.text),
+                  benchResult.detail
+                    ? h('span', { className: 'kb-bench-detail' }, ' ' + benchResult.detail)
+                    : null,
+                )
+              : null,
           ),
         ),
 

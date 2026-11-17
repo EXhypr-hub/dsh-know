@@ -1704,6 +1704,67 @@ await test('按钮 ↔ 后端 全量对照', async () => {
   ok('按钮 ↔ 后端 全量对照', `${total} 个按钮全部有动作，前后端组合全部对得上`)
 })
 
+await test('测速结论覆盖所有设备组合', async () => {
+  /*
+   * 复刻 index.js 里的 verdict 生成逻辑，验证四种组合都给出明确结论。
+   * 原来只在 CPU 与 GPU 都测通时才生成结论，导致 GPU 不可用的机器上
+   * 界面上只有两个数字，看不出该选哪个。
+   */
+  function verdictOf(results) {
+    const cpu = results.find((r) => r.device === 'cpu' && r.ok)
+    const dml = results.find((r) => r.device === 'dml' && r.ok)
+    const failReason = (device) => {
+      const item = results.find((r) => r.device === device && !r.ok)
+      return item?.error ? item.error.slice(0, 60) : '不可用'
+    }
+
+    if (cpu && dml) {
+      const ratio = dml.perMs / cpu.perMs
+      return {
+        faster: ratio < 1 ? 'dml' : 'cpu',
+        summary: ratio < 1
+          ? `DirectML 快 ${(1 / ratio).toFixed(1)} 倍，可以试试 GPU`
+          : `CPU 快 ${ratio.toFixed(1)} 倍，建议保持 CPU`,
+      }
+    }
+    if (cpu && !dml) return { faster: 'cpu', summary: `GPU 测不通（${failReason('dml')}），建议保持 CPU` }
+    if (!cpu && dml) return { faster: 'dml', summary: `CPU 测不通（${failReason('cpu')}），只能用 DirectML` }
+    return {
+      faster: null,
+      summary: `两种设备都测不通：CPU ${failReason('cpu')}；GPU ${failReason('dml')}`,
+    }
+  }
+
+  const cases = [
+    ['两者都通·CPU 快', [{ device: 'cpu', ok: true, perMs: 3 }, { device: 'dml', ok: true, perMs: 10 }], 'cpu', /CPU 快/],
+    ['两者都通·GPU 快', [{ device: 'cpu', ok: true, perMs: 10 }, { device: 'dml', ok: true, perMs: 3 }], 'dml', /DirectML 快/],
+    ['只有 CPU 通', [{ device: 'cpu', ok: true, perMs: 3 }, { device: 'dml', ok: false, error: 'DML 初始化失败' }], 'cpu', /GPU 测不通.*DML 初始化失败/],
+    ['只有 GPU 通', [{ device: 'cpu', ok: false, error: 'OOM' }, { device: 'dml', ok: true, perMs: 5 }], 'dml', /CPU 测不通.*OOM/],
+    ['两者都不通', [{ device: 'cpu', ok: false, error: 'A' }, { device: 'dml', ok: false, error: 'B' }], null, /都测不通/],
+  ]
+
+  for (const [label, results, expectFaster, pattern] of cases) {
+    const v = verdictOf(results)
+    if (v.faster !== expectFaster) {
+      throw new Error(`${label}：结论应为 ${expectFaster}，实际 ${v.faster}`)
+    }
+    if (!pattern.test(v.summary)) {
+      throw new Error(`${label}：结论文案不含预期内容「${pattern}」，实际是「${v.summary}」`)
+    }
+    if (!v.summary || v.summary.length < 6) {
+      throw new Error(`${label}：结论太短，等于没说`)
+    }
+  }
+
+  // 界面必须把结果放在按钮下方独占一行，不能在按钮右边的 flex 行里
+  const { readFileSync } = await import('node:fs')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  if (!/kb-bench-main/.test(client)) throw new Error('结果没有用独立的结论样式')
+  if (!/kb-bench-\$\{benchResult\.kind/.test(client)) throw new Error('结果没有按成败区分样式')
+
+  ok('测速结论覆盖所有设备组合', '5 种设备组合都给出明确结论，结果单独成行显示')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

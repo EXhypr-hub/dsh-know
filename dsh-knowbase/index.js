@@ -1064,15 +1064,44 @@ this.store.deleteDocument(id)
 
       const cpu = results.find((r) => r.device === 'cpu' && r.ok)
       const dml = results.find((r) => r.device === 'dml' && r.ok)
+
+      /*
+       * 结论必须给出来——哪怕只测通一种设备。
+       * 原来只在两种都成功时才生成结论，导致 GPU 不可用的机器上
+       * 界面上只有两个数字，看不出到底该选哪个。
+       */
       let verdict = null
+      const failReason = (device) => {
+        const item = results.find((r) => r.device === device && !r.ok)
+        return item?.error ? item.error.slice(0, 60) : '不可用'
+      }
+
       if (cpu && dml) {
         const ratio = dml.perMs / cpu.perMs
         verdict = {
           faster: ratio < 1 ? 'dml' : 'cpu',
           ratio: Number(ratio.toFixed(2)),
           summary: ratio < 1
-            ? `你这台机器上 DirectML 快 ${(1 / ratio).toFixed(1)} 倍，可以试试开 GPU`
-            : `你这台机器上 CPU 快 ${ratio.toFixed(1)} 倍，建议保持 CPU`,
+            ? `DirectML 快 ${(1 / ratio).toFixed(1)} 倍，可以试试 GPU`
+            : `CPU 快 ${ratio.toFixed(1)} 倍，建议保持 CPU`,
+        }
+      } else if (cpu && !dml) {
+        verdict = {
+          faster: 'cpu',
+          ratio: null,
+          summary: `GPU 测不通（${failReason('dml')}），建议保持 CPU`,
+        }
+      } else if (!cpu && dml) {
+        verdict = {
+          faster: 'dml',
+          ratio: null,
+          summary: `CPU 测不通（${failReason('cpu')}），只能用 DirectML`,
+        }
+      } else {
+        verdict = {
+          faster: null,
+          ratio: null,
+          summary: `两种设备都测不通：CPU ${failReason('cpu')}；GPU ${failReason('dml')}`,
         }
       }
 
