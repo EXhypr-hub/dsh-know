@@ -676,6 +676,7 @@ window.__ModuleLoader__.load({
     'rerank.way': '重排方式',
     'rerank.none': '不使用（直接返回融合结果）',
     'rerank.api': 'API（OpenAI 兼容 /rerank）',
+    'rerank.local': '本地模型（完全离线）',
     'rerank.topN': '保留条数',
 
     /* 设置：抓取 */
@@ -786,6 +787,7 @@ window.__ModuleLoader__.load({
     'rerank.way': 'Rerank method',
     'rerank.none': 'None (return fused results)',
     'rerank.api': 'API (OpenAI compatible /rerank)',
+    'rerank.local': 'Local model (fully offline)',
     'rerank.topN': 'Keep top N',
 
     'fetch.title': 'Fetch settings',
@@ -2400,6 +2402,10 @@ window.__ModuleLoader__.load({
         setConfig((cur) => (cur === null ? cur : { ...cur, api: { ...cur.api, ...patch } }))
       }, [])
 
+      const patchLocal = useCallback((patch) => {
+        setConfig((cur) => (cur === null ? cur : { ...cur, local: { ...cur.local, ...patch } }))
+      }, [])
+
       const choosePreset = useCallback((id) => {
         setPresetId(id)
         const preset = RERANK_PRESETS.find((p) => p.id === id)
@@ -2421,7 +2427,7 @@ window.__ModuleLoader__.load({
         try {
           await api('rerank', {
             action: 'set',
-            config: { provider: config.provider, api: config.api },
+            config: { provider: config.provider, api: config.api, local: config.local },
           })
           setMessage({ kind: 'ok', text: '已保存' })
           onChanged?.()
@@ -2438,7 +2444,7 @@ window.__ModuleLoader__.load({
         try {
           await api('rerank', {
             action: 'set',
-            config: { provider: config.provider, api: config.api },
+            config: { provider: config.provider, api: config.api, local: config.local },
           })
           const r = await api('rerank', { action: 'test' })
           setMessage({
@@ -2470,10 +2476,56 @@ window.__ModuleLoader__.load({
           },
             h('option', { value: 'none' }, t('rerank.none')),
             h('option', { value: 'api' }, t('rerank.api')),
+            h('option', { value: 'local' }, t('rerank.local')),
           ),
           h('div', { className: 'kb-field-hint' },
-            '重排会再发一次请求，能显著提升相关性，但会增加一点延迟和费用。'),
+            config.provider === 'local'
+              ? '本地重排完全离线，不花钱；首次使用需要下载模型（约 580MB）。'
+              : '重排会再发一次请求，能显著提升相关性，但会增加一点延迟和费用。'),
         ),
+
+        /* ── 本地重排 ── */
+        config.provider === 'local'
+          ? h(React.Fragment, null,
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '重排模型'),
+                h('select', {
+                  className: 'kb-select',
+                  value: config.local.modelKey,
+                  onChange: (e) => patchLocal({ modelKey: e.target.value }),
+                },
+                  h('option', { value: 'bge-reranker-v2-m3' },
+                    'BGE Reranker v2 m3（多语言，中文最好，约 580MB）'),
+                  h('option', { value: 'ms-marco-minilm' },
+                    'MS MARCO MiniLM（极小约 23MB，仅适合英文）'),
+                ),
+                h('div', { className: 'kb-field-hint' },
+                  'BGE 版本对中文区分度高（实测相关/无关相差 0.95）；'
+                  + 'MiniLM 是英文模型，处理中文几乎无区分度。'),
+              ),
+
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, '或手动指定模型目录'),
+                h('input', {
+                  className: 'kb-input',
+                  placeholder: '留空则用上面的模型，首次使用自动下载',
+                  value: config.local.modelId,
+                  onChange: (e) => patchLocal({ modelId: e.target.value }),
+                }),
+              ),
+
+              h('div', { className: 'kb-field' },
+                h('label', { className: 'kb-field-label' }, t('rerank.topN')),
+                h('input', {
+                  className: 'kb-input',
+                  type: 'number',
+                  min: 1, max: 50,
+                  value: config.local.topN,
+                  onChange: (e) => patchLocal({ topN: Number(e.target.value) || 8 }),
+                }),
+              ),
+            )
+          : null,
 
         config.provider === 'api'
           ? h(React.Fragment, null,

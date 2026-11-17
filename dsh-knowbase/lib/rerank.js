@@ -4,16 +4,18 @@
  * 检索时先粗召回一批候选（关键词 + 向量融合），再用重排模型精排。
  * 重排比嵌入贵，所以只对少量候选做（默认 20 条）。
  *
- * 支持两种后端：
- *   1. OpenAI 兼容的 /rerank 接口（硅基流动、Cohere、Jina 都提供）
- *   2. 关闭（不重排，直接用融合分数）
+ * 支持三种后端：
+ *   1. 本地 ONNX 交叉编码器（bge-reranker-v2-m3 等），完全离线
+ *   2. OpenAI 兼容的 /rerank 接口（硅基流动、Cohere、Jina 都提供）
+ *   3. 关闭（不重排，直接用融合分数）
  */
 
 /** 归一化重排配置 */
 export function resolveRerankConfig(raw) {
   const cfg = raw ?? {}
+  const provider = ['none', 'api', 'local'].includes(cfg.provider) ? cfg.provider : 'none'
   return {
-    provider: ['none', 'api'].includes(cfg.provider) ? cfg.provider : 'none',
+    provider,
     api: {
       baseUrl: String(cfg.api?.baseUrl ?? '').trim().replace(/\/+$/, ''),
       model: String(cfg.api?.model ?? '').trim(),
@@ -21,6 +23,12 @@ export function resolveRerankConfig(raw) {
       timeoutMs: clamp(Number(cfg.api?.timeoutMs ?? 20000), 1000, 120000),
       // 有些服务（Cohere）要求传 documents 数组，有些接受 texts；用这个开关切换
       style: cfg.api?.style === 'cohere' ? 'cohere' : 'openai',
+    },
+    local: {
+      modelKey: String(cfg.local?.modelKey ?? 'bge-reranker-v2-m3'),
+      modelId: String(cfg.local?.modelId ?? '').trim(),
+      mirror: String(cfg.local?.mirror ?? 'hf-mirror'),
+      topN: clamp(Number(cfg.local?.topN ?? 8), 1, 50),
     },
   }
 }
@@ -136,6 +144,31 @@ export class ApiReranker {
       sane: results.length > 0 && results[0].score >= (results[1]?.score ?? -1),
     }
   }
+}
+
+/**
+ * 依据配置创建重排器。
+ * 本地实现拆在 rerank-local.js，动态 import 以免没装依赖时影响启动。
+ *
+ * @param {{ provider: string, api: object, local: object }} config
+ * @param {{ modelsDir?: string }} [context]
+ */
+export async function createReranker(config, context = {}) {
+  const resolved = resolveRerankConfig(config)
+
+  if (resolved.provider === 'api') {
+    return new ApiReranker({ ...resolved, api: { ...resolved.api, apiKey: config?.api?.apiKey ?? '' } })
+  }
+
+  if (resolved.provider === 'local') {
+    const { LocalReranker } = await import('./rerank-local.js')
+    return new LocalReranker({
+      ...resolved.local,
+      modelsDir: context.modelsDir ?? '',
+    })
+  }
+
+  return null
 }
 
 /**

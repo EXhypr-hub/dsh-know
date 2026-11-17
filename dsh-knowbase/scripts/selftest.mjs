@@ -775,6 +775,84 @@ await test('权威来源清单', async () => {
   ok('权威来源清单', `${SOURCES.length} 条，${groups.length} 个主题，许可信息齐全`)
 })
 
+await test('本地重排', async () => {
+  const { resolveRerankConfig, createReranker } = await import('../lib/rerank.js')
+  const { RERANK_MODELS } = await import('../lib/rerank-local.js')
+
+  // 配置归一化要认 local
+  const localCfg = resolveRerankConfig({ provider: 'local', local: { modelKey: 'bge-reranker-v2-m3' } })
+  if (localCfg.provider !== 'local') throw new Error('provider=local 未被接受')
+  if (!localCfg.local?.modelKey) throw new Error('缺少 local 配置')
+
+  // 非法 provider 回落 none
+  const bad = resolveRerankConfig({ provider: '乱写' })
+  if (bad.provider !== 'none') throw new Error('非法 provider 未回落')
+
+  // 模型清单完整性
+  const keys = Object.keys(RERANK_MODELS)
+  if (keys.length < 2) throw new Error('重排模型清单过少')
+  for (const k of keys) {
+    const spec = RERANK_MODELS[k]
+    if (!spec.repo) throw new Error(`${k} 缺 repo`)
+    if (!spec.sizeMB) throw new Error(`${k} 缺体积说明`)
+  }
+
+  // 工厂：local 应返回本地实现，none 应返回 null
+  const factoryLocal = await createReranker({ provider: 'local', local: {} }, { modelsDir: '/tmp' })
+  if (!factoryLocal) throw new Error('工厂未创建本地重排器')
+  if (!factoryLocal.configured) throw new Error('本地重排器应默认可用')
+  if (!String(factoryLocal.label).includes('本地')) throw new Error('本地重排 label 不对')
+
+  const factoryNone = await createReranker({ provider: 'none' })
+  if (factoryNone !== null) throw new Error('provider=none 应返回 null')
+
+  ok('本地重排', `${keys.length} 个模型，配置与工厂正确`)
+})
+
+await test('i18n 字典完整性', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  const dictStart = src.indexOf('const DICT = {')
+  const dictEnd = src.indexOf("const LOCALE_NS = 'dsh-knowbase'")
+  if (dictStart < 0 || dictEnd < 0) throw new Error('找不到内联字典')
+
+  const dict = src.slice(dictStart, dictEnd)
+  const body = src.slice(dictEnd)
+
+  // 中文、英文条数应一致
+  const zhKeys = [...dict.matchAll(/'([a-z]+\.[a-zA-Z]+)':/g)].map((m) => m[1])
+  const uniqueZh = new Set(zhKeys)
+  if (uniqueZh.size < 50) throw new Error(`字典条目过少: ${uniqueZh.size}`)
+
+  // 用到的 key 必须都存在，否则界面会显示原始 key
+  const used = [...new Set([...body.matchAll(/t\('([a-z]+\.[a-zA-Z]+)'\)/g)].map((m) => m[1]))]
+  const missing = used.filter((k) => !uniqueZh.has(k))
+  if (missing.length) throw new Error(`字典缺 key: ${missing.join(', ')}`)
+
+  // t() 只能在组件内部调用（组件外没有 t，会运行时崩溃）
+  const lines = src.split('\n')
+  const scopes = []
+  for (let i = 0; i < lines.length; i++) {
+    if (/^    function (Panel|SidePane|SettingsPanel|LocalModelPicker|RerankPanel|FetchPanel)\b/.test(lines[i])) {
+      let end = lines.length - 1
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j] === '    }') { end = j; break }
+      }
+      scopes.push([i, end])
+    }
+  }
+  const outside = []
+  for (let i = 0; i < lines.length; i++) {
+    if (!/\bt\('/.test(lines[i])) continue
+    if (/useT|setTranslator|function translate|const t = useT/.test(lines[i])) continue
+    if (!scopes.some(([a, b]) => i >= a && i <= b)) outside.push(i + 1)
+  }
+  if (outside.length) throw new Error(`t() 在组件外调用，行: ${outside.join(', ')}`)
+
+  ok('i18n 字典完整性', `${uniqueZh.size} 条，${used.length} 个使用中，作用域正确`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

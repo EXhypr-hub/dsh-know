@@ -718,21 +718,30 @@ class KnowledgeBase {
 
     if (this.rerankerCache?.key === cacheKey) return this.rerankerCache.reranker
 
-    const { ApiReranker } = await import('./lib/rerank.js')
-    const reranker = new ApiReranker({
-      ...config,
-      api: { ...config.api, apiKey },
-    })
+    const { createReranker } = await import('./lib/rerank.js')
+    const reranker = await createReranker(
+      { ...config, api: { ...config.api, apiKey } },
+      { modelsDir: join(this.dataRoot, 'models') },
+    )
     this.rerankerCache = { key: cacheKey, reranker }
     return reranker
   }
 
   /** 读取重排配置 */
   getRerankConfig() {
-    return this.store.getSetting('rerank', {
-      provider: 'none',
+    const stored = this.store.getSetting('rerank', null)
+    const defaults = {
+      provider: 'none',      // none | api | local
       api: { baseUrl: '', model: '', topN: 8, timeoutMs: 20000, style: 'openai' },
-    })
+      local: { modelKey: 'bge-reranker-v2-m3', modelId: '', mirror: 'hf-mirror', topN: 8 },
+    }
+    if (!stored) return defaults
+    return {
+      ...defaults,
+      ...stored,
+      api: { ...defaults.api, ...(stored.api ?? {}) },
+      local: { ...defaults.local, ...(stored.local ?? {}) },
+    }
   }
 
   /** 保存重排配置 */
@@ -742,6 +751,7 @@ class KnowledgeBase {
       ...current,
       ...patch,
       api: { ...current.api, ...(patch.api ?? {}) },
+      local: { ...current.local, ...(patch.local ?? {}) },
     }
     this.store.setSetting('rerank', next)
     this.rerankerCache = null
