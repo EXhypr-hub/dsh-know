@@ -283,6 +283,55 @@ window.__ModuleLoader__.load({
 }
 .kb-notice-err { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 35%, var(--dsw-alias-border-l2)); }
 
+/* ── 右侧栏面板 ── */
+.kb-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+}
+.kb-pane-head { flex: none; }
+.kb-select {
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.kb-select:focus { border-color: var(--dsw-alias-brand-primary); }
+.kb-pane-search { flex: none; display: flex; gap: 6px; }
+.kb-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-pane-body .kb-empty { padding: 24px 14px; }
+.kb-pane-body .kb-hit { padding: 8px 10px; }
+.kb-pane-body .kb-hit-text { font-size: 12px; max-height: 4.2em; }
+.kb-pane-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
 /* ── 动效 ── */
 @keyframes kb-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .kb-fade-in { animation: kb-fade-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
@@ -296,11 +345,8 @@ window.__ModuleLoader__.load({
   .kb-drop-on { transform: none; }
 }
 
-/* ── 侧栏图标：撑满按钮格 ── */
-.kb-icon { display: block; width: 100%; height: 100%; color: inherit; }
-
-/* ── 内容区图标：按传入尺寸固定，不撑满 ── */
-.kb-icon-fixed { display: block; color: inherit; flex: none; }
+/* ── 图标：一律按传入尺寸固定，绝不撑满父容器 ── */
+.kb-icon { display: block; color: inherit; flex: none; }
 `
 
     function useStyles() {
@@ -317,16 +363,15 @@ window.__ModuleLoader__.load({
     /* ══════════════════════════ 图标 ══════════════════════════ */
 
     /**
-     * 书页图标。
-     * @param size    图标边长（px）。fill=true 时忽略，改为撑满父容器。
-     * @param fill    侧栏按钮用：撑满整个格子
+     * 书页图标。始终按传入的 size 渲染成固定尺寸，不撑满父容器。
+     * @param size    图标边长（px）
      * @param active  选中态加粗描边
      */
-    function KnowledgeIcon({ size = 20, active = false, fill = false }) {
+    function KnowledgeIcon({ size = 20, active = false }) {
       return h('svg', {
-        className: fill ? 'kb-icon' : 'kb-icon-fixed',
-        width: fill ? undefined : size,
-        height: fill ? undefined : size,
+        className: 'kb-icon',
+        width: size,
+        height: size,
         viewBox: '0 0 24 24', fill: 'none',
         'aria-hidden': true, stroke: 'currentColor',
         strokeWidth: active ? 1.9 : 1.6,
@@ -841,6 +886,139 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ══════════════════════════ 右侧栏面板 ══════════════════════════ */
+
+    /**
+     * 聊天时并排可用的知识库面板：选库 → 搜 → 看结果。
+     * 比左侧主面板窄，所以布局更紧凑。
+     */
+    function SidePane() {
+      useStyles()
+
+      const [status, setStatus] = useState(null)
+      const [collections, setCollections] = useState([])
+      const [activeId, setActiveId] = useState(null)
+      const [query, setQuery] = useState('')
+      const [hits, setHits] = useState(null)
+      const [searching, setSearching] = useState(false)
+      const [error, setError] = useState(null)
+      const [expanded, setExpanded] = useState(new Set())
+
+      const refresh = useCallback(async () => {
+        try {
+          const [stat, cols] = await Promise.all([api('status'), api('collections', { action: 'list' })])
+          setStatus(stat)
+          setCollections(cols)
+          setActiveId((cur) => (cur !== null && cols.some((c) => c.id === cur) ? cur : cols[0]?.id ?? null))
+        } catch (err) {
+          setError(err.message)
+        }
+      }, [])
+
+      useEffect(() => { refresh() }, [refresh])
+
+      const runSearch = useCallback(async () => {
+        const q = query.trim()
+        if (!q) { setHits(null); return }
+        setSearching(true)
+        setError(null)
+        try {
+          const value = await api('search', { query: q, collectionId: activeId, limit: 20 })
+          setHits(value)
+          setExpanded(new Set())
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setSearching(false)
+        }
+      }, [query, activeId])
+
+      const toggleExpand = useCallback((id) => {
+        setExpanded((prev) => {
+          const next = new Set(prev)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+      }, [])
+
+      const activeCollection = collections.find((c) => c.id === activeId) ?? null
+
+      return h('div', { className: 'kb-pane' },
+
+        /* 库选择 */
+        h('div', { className: 'kb-pane-head' },
+          h('select', {
+            className: 'kb-select',
+            value: activeId ?? '',
+            onChange: (e) => { setActiveId(Number(e.target.value)); setHits(null) },
+            'aria-label': '选择知识库',
+          },
+            collections.length === 0
+              ? h('option', { value: '' }, '没有知识库')
+              : collections.map((c) => h('option', { key: c.id, value: c.id }, `${c.name}（${c.document_count}）`)),
+          ),
+        ),
+
+        /* 搜索框 */
+        h('div', { className: 'kb-pane-search' },
+          h('input', {
+            className: 'kb-input',
+            placeholder: '搜索这个知识库…',
+            value: query,
+            onChange: (e) => setQuery(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') runSearch() },
+          }),
+          h('button', {
+            className: 'kb-btn kb-btn-primary kb-btn-sm',
+            disabled: searching || !query.trim(),
+            onClick: runSearch,
+          }, searching ? '…' : '搜'),
+        ),
+
+        error ? h('div', { className: 'kb-notice kb-notice-err' }, error) : null,
+
+        /* 结果 */
+        h('div', { className: 'kb-pane-body' },
+          hits === null
+            ? h('div', { className: 'kb-empty' },
+                h(KnowledgeIcon, { size: 26 }),
+                h('div', { className: 'kb-empty-title' }, activeCollection ? activeCollection.name : '暂无知识库'),
+                h('div', { className: 'kb-empty-hint' },
+                  activeCollection
+                    ? `${activeCollection.document_count} 份文档 · ${activeCollection.chunk_count} 块，输入关键词开始搜索`
+                    : '先在左侧「知识库」里新建一个'),
+              )
+            : hits.length === 0
+              ? h('div', { className: 'kb-notice' }, `没有找到「${query.trim()}」`)
+              : h('div', { className: 'kb-hits' },
+                  hits.map((hit) => h('div', { key: hit.id, className: 'kb-hit kb-fade-in' },
+                    h('div', { className: 'kb-hit-head' },
+                      h('span', { className: 'kb-hit-doc' }, hit.title),
+                      hit.page ? h('span', { className: 'kb-hit-page' }, `P${hit.page}`) : null,
+                    ),
+                    h('div', {
+                      className: `kb-hit-text${expanded.has(hit.id) ? ' kb-hit-text-open' : ''}`,
+                    }, highlight(hit.text, query)),
+                    hit.text.length > 90
+                      ? h('button', {
+                          className: 'kb-hit-toggle',
+                          onClick: () => toggleExpand(hit.id),
+                        }, expanded.has(hit.id) ? '收起' : '展开')
+                      : null,
+                  )),
+                ),
+        ),
+
+        /* 底部状态 */
+        h('div', { className: 'kb-pane-foot' },
+          h('span', { className: status?.ready ? 'kb-dot kb-dot-on' : 'kb-dot kb-dot-off' }),
+          h('span', null, status?.ready ? `v${status.version}` : '未就绪'),
+          h('span', { style: { marginLeft: 'auto' } }, status?.counts ? `${status.counts.chunks} 块` : ''),
+        ),
+      )
+    }
+
     /* ══════════════════════════ 注册 ══════════════════════════ */
 
     return {
@@ -857,7 +1035,6 @@ window.__ModuleLoader__.load({
             (props) => h(KnowledgeIcon, {
               size: typeof props?.size === 'number' ? props.size : 20,
               active: props?.active === true,
-              fill: true,
             }),
           ),
         )
@@ -865,6 +1042,41 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: 'dsh-knowbase' }, Panel),
         )
+
+        /* ── 右侧栏：聊天时可并排搜索 ── */
+        ctx.inject(['sidebarRightTabs'], (scope) => {
+          const tabs = scope.sidebarRightTabs
+          if (tabs === undefined || typeof tabs.register !== 'function') return
+
+          const disposers = []
+          try {
+            disposers.push(
+              tabs.register({
+                id: 'dsh-knowbase',
+                kind: 'dsh-knowbase',
+                title: () => '知识库',
+                guide: [{
+                  id: 'dsh-knowbase',
+                  order: 30,
+                  title: () => '知识库',
+                  description: () => '在对话旁直接搜索本地知识库，命中结果带文档名与页码。',
+                }],
+              }),
+            )
+            disposers.push(
+              scope.slots.inject('sidebar.right.pane.tab', () =>
+                scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-knowbase' }, SidePane),
+              ),
+            )
+          } catch {
+            for (const dispose of disposers) dispose()
+            return
+          }
+
+          return () => {
+            for (const dispose of disposers) dispose()
+          }
+        })
       },
     }
   },
