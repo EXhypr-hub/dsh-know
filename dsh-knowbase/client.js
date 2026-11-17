@@ -135,24 +135,34 @@ window.__ModuleLoader__.load({
 }
 .kb-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-border-l2); }
 .kb-btn:disabled { cursor: default; }
-/* 禁用态：改用中性底色 + 可读文字，避免白字叠浅底看不见 */
+/* 禁用态统一为中性底色 + 可读文字。
+   注意：这些规则必须排在 .kb-btn-primary 之后，
+   否则同优先级下会被普通态的背景色覆盖，出现白底白字。 */
+/* 主按钮：用品牌色做半透明底 + 品牌色描边文字。
+   不依赖未知取值的填充色 token——DSH 深色主题下 button-primary-fill
+   可能是接近白色的值，会让按钮看起来是"白块"。 */
+.kb-btn-primary {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, var(--dsw-alias-bg-layer-1));
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 600;
+}
+.kb-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, var(--dsw-alias-bg-layer-1));
+}
+
+/* 禁用态必须排在 .kb-btn-primary 之后（同优先级，后写者生效） */
 .kb-btn:disabled {
   background: var(--dsw-alias-bg-layer-2);
-  border-color: var(--dsw-alias-border-l1);
+  border-color: var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-secondary);
   opacity: 1;
 }
 .kb-btn-primary:disabled {
   background: var(--dsw-alias-bg-layer-2);
-  border-color: var(--dsw-alias-border-l1);
+  border-color: var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-secondary);
 }
-.kb-btn-primary {
-  background: var(--dsw-alias-brand-primary);
-  border-color: var(--dsw-alias-brand-primary);
-  color: #fff;
-}
-.kb-btn-primary:hover:not(:disabled) { opacity: 0.9; background: var(--dsw-alias-brand-primary); }
 .kb-btn-sm { padding: 3px 9px; font-size: 11px; }
 .kb-btn-danger { color: var(--dsw-alias-state-error-primary); }
 
@@ -418,12 +428,29 @@ window.__ModuleLoader__.load({
 .kb-icon { display: block; color: inherit; flex: none; }
 `
 
+    /*
+     * 样式注入。
+     * 用 CSS 内容的指纹做 key：内容变了就重建 style 标签，
+     * 否则热更新后页面会继续沿用旧样式（改了等于没改）。
+     */
+    const CSS_VERSION = (() => {
+      let hash = 0
+      for (let i = 0; i < css.length; i++) {
+        hash = ((hash << 5) - hash + css.charCodeAt(i)) | 0
+      }
+      return `${STYLE_ID}/${(hash >>> 0).toString(36)}`
+    })()
+
     function useStyles() {
       useEffect(() => {
-        if (document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) !== null) return
+        if (document.querySelector(`style[data-plugin-css="${CSS_VERSION}"]`) !== null) return
+        // 清掉本插件的旧样式，避免多份规则叠加
+        for (const stale of document.querySelectorAll('style[data-plugin="dsh-knowbase"]')) {
+          stale.remove()
+        }
         const el = document.createElement('style')
         el.dataset.plugin = 'dsh-knowbase'
-        el.dataset.pluginCss = STYLE_ID
+        el.dataset.pluginCss = CSS_VERSION
         el.textContent = css
         document.head.appendChild(el)
       }, [])
@@ -1183,6 +1210,57 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        id: 'qianfan',
+        label: '百度千帆 ERNIE',
+        baseUrl: 'https://qianfan.baidubce.com/v2',
+        keyUrl: 'https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application',
+        hint: '百度文心一言平台，国内可用。',
+        models: [
+          { id: 'embedding-v1', dim: 384, note: '基础向量化，短文本（推荐）' },
+          { id: 'bge-large-zh', dim: 1024, note: 'BGE 中文大模型，512 token 上限' },
+          { id: 'bge-large-en', dim: 1024, note: 'BGE 英文大模型' },
+          { id: 'tao-8k', dim: 1024, note: '支持 8K 长文本' },
+        ],
+      },
+      {
+        id: 'cohere',
+        label: 'Cohere',
+        baseUrl: 'https://api.cohere.ai/compatibility/v1',
+        keyUrl: 'https://dashboard.cohere.com/api-keys',
+        hint: '国外服务，国内可能需要代理。',
+        models: [
+          { id: 'embed-multilingual-v3.0', dim: 1024, note: '多语言，跨 100+ 语言（推荐）' },
+          { id: 'embed-english-v3.0', dim: 1024, note: '英文优化' },
+          { id: 'embed-multilingual-light-v3.0', dim: 384, note: '轻量多语言' },
+          { id: 'embed-english-light-v3.0', dim: 384, note: '轻量英文' },
+        ],
+      },
+      {
+        id: 'jina',
+        label: 'Jina AI',
+        baseUrl: 'https://api.jina.ai/v1',
+        keyUrl: 'https://jina.ai/embeddings/',
+        hint: '支持超长上下文（32K），有免费额度。',
+        models: [
+          { id: 'jina-embeddings-v4', dim: 2048, note: '最新，32K 上下文，多模态（推荐）' },
+          { id: 'jina-embeddings-v3', dim: 1024, note: '多语言，8K 上下文' },
+          { id: 'jina-clip-v2', dim: 1024, note: '文图混合嵌入' },
+        ],
+      },
+      {
+        id: 'voyage',
+        label: 'Voyage AI',
+        baseUrl: 'https://api.voyageai.com/v1',
+        keyUrl: 'https://dash.voyageai.com/api-keys',
+        hint: '检索效果好，32K 上下文。',
+        models: [
+          { id: 'voyage-3', dim: 1024, note: '通用，质量最高（推荐）' },
+          { id: 'voyage-3-lite', dim: 512, note: '低延迟低成本' },
+          { id: 'voyage-multilingual-2', dim: 1024, note: '多语言检索优化' },
+          { id: 'voyage-large-2', dim: 1536, note: '上一代大模型' },
+        ],
+      },
+      {
         id: 'deepseek',
         label: 'DeepSeek',
         baseUrl: 'https://api.deepseek.com/v1',
@@ -1226,6 +1304,7 @@ window.__ModuleLoader__.load({
         models: [
           { id: 'bge-m3', dim: 1024, note: '多语言（推荐）' },
           { id: 'bge-large-zh-v1.5', dim: 1024, note: '中文' },
+          { id: 'jina-embeddings-v2-base-zh', dim: 768, note: 'Jina 中文' },
         ],
       },
     ]
