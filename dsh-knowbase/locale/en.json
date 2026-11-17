@@ -1,7 +1,8 @@
 {
   "meta": {
     "title": "Local knowledge base",
-    "description": "Build a knowledge base from your own documents. Drop in PDF, Word, PowerPoint and Excel files, or let the agent collect material from authoritative sources. Answers come back with the passage, the document name and the page number, and every file stays on this computer."
+    "description": "Build a knowledge base from your own documents. Drop in PDF, Word, PowerPoint and Excel files, or let the agent collect material from authoritative sources. Answers come back with the passage, the document name and the page number, and every file stays on this computer.",
+    "detail": "docs/DETAIL.md"
   },
   "panel": {
     "title": "Local knowledge base",

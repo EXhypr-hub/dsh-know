@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="本地知识库界面示意">
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4D8DFF"/>
+      <stop offset="1" stop-color="#2C6BD8"/>
+    </linearGradient>
+    <style>
+      .frame { fill: #15181d; }
+      .panel { fill: #1b1f26; }
+      .card  { fill: #20252e; }
+      .line  { fill: #2b313c; }
+      .text  { fill: #e8ebf0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .muted { fill: #8b95a5; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .mono  { font-family: ui-monospace, "Cascadia Code", monospace; }
+    </style>
+  </defs>
+
+  <rect class="frame" width="640" height="360" rx="10"/>
+
+  <!-- 左侧栏 -->
+  <rect class="panel" x="0" y="0" width="128" height="360" rx="10"/>
+  <rect class="panel" x="112" y="0" width="16" height="360"/>
+  <circle cx="22" cy="26" r="7" fill="url(#accent)"/>
+  <rect class="line" x="36" y="21" width="52" height="9" rx="4.5"/>
+
+  <!-- 侧栏条目 -->
+  <rect x="12" y="56" width="104" height="22" rx="6" fill="#232935"/>
+  <rect class="muted" x="22" y="64" width="56" height="6" rx="3"/>
+  <rect class="muted" x="22" y="88" width="68" height="6" rx="3" opacity="0.7"/>
+  <rect class="muted" x="22" y="108" width="48" height="6" rx="3" opacity="0.7"/>
+  <rect class="muted" x="22" y="128" width="62" height="6" rx="3" opacity="0.7"/>
+
+  <!-- 知识库区块 -->
+  <rect class="muted" x="14" y="162" width="34" height="6" rx="3" opacity="0.55"/>
+  <rect x="12" y="176" width="104" height="24" rx="6" fill="#272e3a"/>
+  <rect class="text" x="22" y="185" width="60" height="6" rx="3" opacity="0.85"/>
+  <rect class="muted" x="92" y="185" width="14" height="6" rx="3" opacity="0.6"/>
+
+  <!-- 顶栏 -->
+  <rect class="line" x="128" y="44" width="512" height="1"/>
+  <rect class="text" x="144" y="18" width="86" height="10" rx="5"/>
+  <rect class="muted" x="144" y="33" width="130" height="6" rx="3" opacity="0.7"/>
+  <rect x="566" y="16" width="60" height="16" rx="8" fill="#1d2530" stroke="#2c3a4a"/>
+  <circle cx="578" cy="24" r="3" fill="#3ecf8e"/>
+  <rect class="muted" x="585" y="21" width="34" height="6" rx="3" opacity="0.8"/>
+
+  <!-- 拖放区 -->
+  <rect x="144" y="60" width="480" height="54" rx="8" fill="#1b1f26" stroke="#3a424f" stroke-dasharray="5 4"/>
+  <rect class="text" x="286" y="76" width="196" height="7" rx="3.5" opacity="0.9"/>
+  <rect class="muted" x="252" y="92" width="264" height="5" rx="2.5" opacity="0.6"/>
+
+  <!-- 文档行 -->
+  <rect class="muted" x="144" y="126" width="42" height="7" rx="3.5" opacity="0.75"/>
+  <rect class="card" x="144" y="140" width="480" height="30" rx="7"/>
+  <rect class="text" x="156" y="149" width="120" height="6" rx="3" opacity="0.9"/>
+  <rect class="muted" x="156" y="160" width="72" height="5" rx="2.5" opacity="0.6"/>
+  <rect x="566" y="149" width="46" height="14" rx="7" fill="#1d2a22" stroke="#2f6b4a"/>
+  <rect x="575" y="153" width="28" height="5" rx="2.5" fill="#3ecf8e" opacity="0.85"/>
+
+  <!-- 检索区 -->
+  <rect class="text" x="144" y="186" width="58" height="7" rx="3.5"/>
+  <rect class="muted" x="210" y="187" width="64" height="5" rx="2.5" opacity="0.6"/>
+  <rect x="144" y="200" width="416" height="22" rx="6" fill="#1b1f26" stroke="#2b313c"/>
+  <rect class="muted" x="156" y="209" width="120" height="5" rx="2.5" opacity="0.55"/>
+  <rect x="568" y="200" width="56" height="22" rx="6" fill="#1f2b3f" stroke="url(#accent)"/>
+  <rect x="582" y="209" width="28" height="5" rx="2.5" fill="#7aa7ff"/>
+
+  <!-- 命中卡片 -->
+  <rect class="card" x="144" y="232" width="480" height="46" rx="8"/>
+  <rect class="text" x="156" y="241" width="86" height="6" rx="3" opacity="0.9"/>
+  <rect class="muted" x="250" y="241" width="26" height="6" rx="3" opacity="0.6"/>
+  <rect class="muted" x="156" y="254" width="330" height="5" rx="2.5" opacity="0.7"/>
+  <rect class="mono" x="156" y="264" width="196" height="5" rx="2.5" fill="#8b95a5" opacity="0.55"/>
+
+  <rect class="card" x="144" y="286" width="480" height="46" rx="8"/>
+  <rect class="text" x="156" y="295" width="74" height="6" rx="3" opacity="0.9"/>
+  <rect class="muted" x="238" y="295" width="26" height="6" rx="3" opacity="0.6"/>
+  <rect class="muted" x="156" y="308" width="300" height="5" rx="2.5" opacity="0.7"/>
+  <rect class="mono" x="156" y="318" width="160" height="5" rx="2.5" fill="#8b95a5" opacity="0.55"/>
+</svg>

@@ -570,6 +570,284 @@ window.__ModuleLoader__.load({
       }, [])
     }
 
+    /* ══════════════════════════ 界面文案字典 ══════════════════════════ */
+
+    /*
+     * 内联字典：client.js 是浏览器模块，没有打包器，
+     * 无法 import lib/dict.js 或 locale/*.json。
+     * locale/*.json 只保留 meta 供插件管理器显示。
+     */
+    const DICT = {
+  zh: {
+    /* 顶栏 */
+    'header.title': '本地知识库',
+    'header.subtitle': '文档导入 · 语义检索 · 权威来源采集',
+    'header.ready': '已就绪',
+    'header.notReady': '未就绪',
+    'header.connecting': '连接中…',
+    'header.docCount': '{n} 份文档',
+
+    /* 通用按钮 */
+    'common.save': '保存',
+    'common.saving': '保存中…',
+    'common.cancel': '取消',
+    'common.delete': '删除',
+    'common.remove': '移除',
+    'common.test': '测试连接',
+    'common.testing': '测试中…',
+    'common.retry': '重试',
+    'common.expand': '展开',
+    'common.collapse': '收起',
+    'common.expandAll': '展开全文',
+    'common.loading': '加载中…',
+    'common.enabled': '已开启',
+    'common.disabled': '已关闭',
+
+    /* 左栏 */
+    'side.collections': '知识库',
+    'side.new': '新建知识库',
+    'side.empty': '还没有知识库',
+    'side.namePlaceholder': '知识库名称',
+    'side.create': '创建',
+    'side.deleteConfirm': '删除知识库「{name}」及其中的全部文档？此操作不可恢复。',
+    'side.rightClickHint': '{n} 份文档 · 右键删除',
+
+    /* 拖放区 */
+    'drop.title': '把文件拖到这里，或点击选择',
+    'drop.dragging': '松开即可导入',
+    'drop.busy': '正在导入…',
+    'drop.hint': '支持 PDF、Word、PPT、Excel、Markdown、TXT、HTML · 单文件 ≤ 50MB',
+
+    /* 文档表 */
+    'docs.title': '文档',
+    'docs.meta': '{docs} 份 · {chunks} 块',
+    'docs.empty': '这个知识库里还没有文档，拖一份进来试试。',
+    'docs.statusReady': '已入库',
+    'docs.statusOcr': '需 OCR',
+    'docs.statusFailed': '失败',
+    'docs.statusPending': '处理中',
+    'docs.rebuild': '重建',
+    'docs.deleteConfirm': '删除「{title}」？',
+
+    /* 检索 */
+    'search.title': '检索测试',
+    'search.meta': '验证入库效果',
+    'search.placeholder': '输入关键词，试试能不能查到…',
+    'search.button': '检索',
+    'search.searching': '检索中',
+    'search.noHits': '没有找到包含「{query}」的内容',
+    'search.modeHybrid': '语义 + 关键词',
+    'search.modeKeyword': '仅关键词',
+    'search.modeRerank': '语义 + 关键词 + 重排',
+    'search.tip': '没有命中。可以换关键词再试',
+
+    /* 空状态 */
+    'empty.noCollection': '左侧还没有知识库',
+    'empty.noCollectionHint': '点左上角「+」新建一个，然后拖入文件。',
+    'empty.noHits': '没有命中',
+
+    /* 设置：嵌入 */
+    'embed.title': '检索设置',
+    'embed.meta': '接入嵌入模型，启用语义检索',
+    'embed.way': '嵌入方式',
+    'embed.none': '不使用（仅关键词检索）',
+    'embed.api': 'API / 本地服务（OpenAI 兼容）',
+    'embed.local': '本地模型（需先下载）',
+    'embed.provider': '服务商',
+    'embed.custom': '自定义…',
+    'embed.baseUrl': '服务地址',
+    'embed.baseUrlHint': '填到 /v1 为止，插件会拼上 /embeddings',
+    'embed.model': '模型',
+    'embed.apiKey': 'API Key',
+    'embed.apiKeySaved': '已保存',
+    'embed.apiKeyPlaceholder': '粘贴 API Key（本地服务可留空）',
+    'embed.batchSize': '批大小',
+    'embed.build': '建立向量索引',
+    'embed.building': '建立中…',
+    'embed.indexReady': '向量索引就绪',
+    'embed.indexPartial': '索引不完整',
+    'embed.notConfigured': '未配置嵌入',
+    'embed.complete': '索引完成 · 共 {n} 条向量',
+    'embed.testOk': '连接成功 · {dim} 维 · 耗时 {ms}ms',
+
+    /* 设置：重排 */
+    'rerank.title': '重排设置',
+    'rerank.meta': '从候选里精排，提高相关性（可选）',
+    'rerank.way': '重排方式',
+    'rerank.none': '不使用（直接返回融合结果）',
+    'rerank.api': 'API（OpenAI 兼容 /rerank）',
+    'rerank.topN': '保留条数',
+
+    /* 设置：抓取 */
+    'fetch.title': '抓取设置',
+    'fetch.meta': '联网取权威资料，含来源清单与防护',
+    'fetch.on': '已允许联网抓取',
+    'fetch.off': '已关闭（完全不联网）',
+    'fetch.whitelist': '站点白名单（可留空）',
+    'fetch.showSources': '查看权威来源（{n}）',
+    'fetch.hideSources': '收起来源清单',
+
+    /* 本地模型 */
+    'models.mirror': '下载镜像',
+    'models.title': '本地模型',
+    'models.download': '下载',
+    'models.use': '选用',
+    'models.selected': '已选中',
+    'models.downloaded': '已下载',
+    'models.progress': '下载中 {done}/{total} · {detail}',
+  },
+
+  en: {
+    'header.title': 'Local knowledge base',
+    'header.subtitle': 'Document import · semantic search · authoritative sources',
+    'header.ready': 'Ready',
+    'header.notReady': 'Not ready',
+    'header.connecting': 'Connecting…',
+    'header.docCount': '{n} documents',
+
+    'common.save': 'Save',
+    'common.saving': 'Saving…',
+    'common.cancel': 'Cancel',
+    'common.delete': 'Delete',
+    'common.remove': 'Remove',
+    'common.test': 'Test connection',
+    'common.testing': 'Testing…',
+    'common.retry': 'Retry',
+    'common.expand': 'Expand',
+    'common.collapse': 'Collapse',
+    'common.expandAll': 'Show full text',
+    'common.loading': 'Loading…',
+    'common.enabled': 'On',
+    'common.disabled': 'Off',
+
+    'side.collections': 'Collections',
+    'side.new': 'New collection',
+    'side.empty': 'No collections yet',
+    'side.namePlaceholder': 'Collection name',
+    'side.create': 'Create',
+    'side.deleteConfirm': 'Delete collection "{name}" and all its documents? This cannot be undone.',
+    'side.rightClickHint': '{n} documents · right-click to delete',
+
+    'drop.title': 'Drop files here, or click to choose',
+    'drop.dragging': 'Release to import',
+    'drop.busy': 'Importing…',
+    'drop.hint': 'PDF, Word, PowerPoint, Excel, Markdown, TXT, HTML · up to 50MB per file',
+
+    'docs.title': 'Documents',
+    'docs.meta': '{docs} files · {chunks} chunks',
+    'docs.empty': 'No documents in this collection yet. Drop one in to try.',
+    'docs.statusReady': 'Indexed',
+    'docs.statusOcr': 'Needs OCR',
+    'docs.statusFailed': 'Failed',
+    'docs.statusPending': 'Processing',
+    'docs.rebuild': 'Reindex',
+    'docs.deleteConfirm': 'Delete "{title}"?',
+
+    'search.title': 'Search test',
+    'search.meta': 'Check what was indexed',
+    'search.placeholder': 'Type keywords to see if they can be found…',
+    'search.button': 'Search',
+    'search.searching': 'Searching',
+    'search.noHits': 'Nothing found for "{query}"',
+    'search.modeHybrid': 'Semantic + keyword',
+    'search.modeKeyword': 'Keyword only',
+    'search.modeRerank': 'Semantic + keyword + rerank',
+    'search.tip': 'No match. Try different keywords',
+
+    'empty.noCollection': 'No collection on the left',
+    'empty.noCollectionHint': 'Click "+" at the top left to create one, then drop files in.',
+    'empty.noHits': 'No match',
+
+    'embed.title': 'Retrieval settings',
+    'embed.meta': 'Connect an embedding model to enable semantic search',
+    'embed.way': 'Embedding method',
+    'embed.none': 'None (keyword search only)',
+    'embed.api': 'API / local server (OpenAI compatible)',
+    'embed.local': 'Local model (download first)',
+    'embed.provider': 'Provider',
+    'embed.custom': 'Custom…',
+    'embed.baseUrl': 'Base URL',
+    'embed.baseUrlHint': 'Fill up to /v1; the plugin appends /embeddings',
+    'embed.model': 'Model',
+    'embed.apiKey': 'API Key',
+    'embed.apiKeySaved': 'Saved',
+    'embed.apiKeyPlaceholder': 'Paste an API key (optional for local servers)',
+    'embed.batchSize': 'Batch size',
+    'embed.build': 'Build vector index',
+    'embed.building': 'Building…',
+    'embed.indexReady': 'Vector index ready',
+    'embed.indexPartial': 'Index incomplete',
+    'embed.notConfigured': 'No embedding configured',
+    'embed.complete': 'Index built · {n} vectors',
+    'embed.testOk': 'Connected · {dim} dimensions · {ms}ms',
+
+    'rerank.title': 'Rerank settings',
+    'rerank.meta': 'Re-score candidates for better relevance (optional)',
+    'rerank.way': 'Rerank method',
+    'rerank.none': 'None (return fused results)',
+    'rerank.api': 'API (OpenAI compatible /rerank)',
+    'rerank.topN': 'Keep top N',
+
+    'fetch.title': 'Fetch settings',
+    'fetch.meta': 'Collect authoritative material, with source list and safeguards',
+    'fetch.on': 'Network fetching enabled',
+    'fetch.off': 'Disabled (fully offline)',
+    'fetch.whitelist': 'Domain allowlist (optional)',
+    'fetch.showSources': 'Show authoritative sources ({n})',
+    'fetch.hideSources': 'Hide source list',
+
+    'models.mirror': 'Download mirror',
+    'models.title': 'Local models',
+    'models.download': 'Download',
+    'models.use': 'Use',
+    'models.selected': 'Selected',
+    'models.downloaded': 'Downloaded',
+    'models.progress': 'Downloading {done}/{total} · {detail}',
+  },
+}
+
+    const LOCALE_NS = 'dsh-knowbase'
+
+    /** 简单插值：{name} 由 params 替换 */
+    function fmt(template, params) {
+      if (!params) return template
+      return String(template).replace(/\{(\w+)\}/g, (match, key) => (
+        Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : match
+      ))
+    }
+
+    /*
+     * 翻译函数与订阅。
+     * 语言切换时通过 locale/change 通知，已挂载的组件重渲染。
+     *
+     * 初始实现就用内置中文兜底，而不是返回 key——
+     * 否则注册失败时界面会直接露出 header.title 这种原始 key。
+     */
+    let translate = (key, params) => fmt(DICT.zh[key] ?? key, params)
+    const localeListeners = new Set()
+
+    function setTranslator(fn) {
+      translate = fn
+      for (const listener of localeListeners) {
+        try {
+          listener()
+        } catch {
+          // 单个监听器失败不影响其他
+        }
+      }
+    }
+
+    /** 组件内取翻译函数，并订阅语言变化 */
+    function useT() {
+      const [, bump] = useState(0)
+      useEffect(() => {
+        const listener = () => bump((n) => n + 1)
+        localeListeners.add(listener)
+        return () => localeListeners.delete(listener)
+      }, [])
+      return translate
+    }
+
     /* ══════════════════════════ 图标 ══════════════════════════ */
 
     /**
@@ -648,6 +926,7 @@ window.__ModuleLoader__.load({
 
     function Panel() {
       useStyles()
+      const t = useT()
 
       const [status, setStatus] = useState(null)
       const [collections, setCollections] = useState([])
@@ -888,7 +1167,7 @@ window.__ModuleLoader__.load({
 
       const totalChunks = activeCollection?.chunk_count ?? 0
 
-      const statusText = !status ? '连接中…' : status.ready ? '已就绪' : '未就绪'
+      const statusText = !status ? t('header.connecting') : status.ready ? t('header.ready') : t('header.notReady')
       const dotClass = !status ? 'kb-dot' : status.ready ? 'kb-dot kb-dot-on' : 'kb-dot kb-dot-off'
 
       const canIngest = activeId !== null && status?.ready === true
@@ -901,8 +1180,8 @@ window.__ModuleLoader__.load({
         h('header', { className: 'kb-header' },
           h(KnowledgeIcon, { size: 22, active: true }),
           h('div', { className: 'kb-header-text' },
-            h('h1', { className: 'kb-title' }, '本地知识库'),
-            h('div', { className: 'kb-subtitle' }, '文档导入 · 语义检索 · 权威来源采集'),
+            h('h1', { className: 'kb-title' }, t('header.title')),
+            h('div', { className: 'kb-subtitle' }, t('header.subtitle')),
           ),
           h('span', { className: 'kb-badge' },
             h('span', { className: dotClass }),
@@ -918,7 +1197,7 @@ window.__ModuleLoader__.load({
           /* 左：库列表 */
           h('aside', { className: 'kb-side' },
             h('div', { className: 'kb-side-head' },
-              h('span', null, '知识库'),
+              h('span', null, t('side.collections')),
               h('button', {
                 className: 'kb-btn kb-btn-sm',
                 style: { marginLeft: 'auto' },
@@ -931,7 +1210,7 @@ window.__ModuleLoader__.load({
               ? h('div', { style: { padding: '0 10px 8px' } },
                   h('input', {
                     className: 'kb-input',
-                    placeholder: '知识库名称',
+                    placeholder: t('side.namePlaceholder'),
                     value: newName,
                     autoFocus: true,
                     onChange: (e) => setNewName(e.target.value),
@@ -941,15 +1220,15 @@ window.__ModuleLoader__.load({
                     },
                   }),
                   h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
-                    h('button', { className: 'kb-btn kb-btn-sm kb-btn-primary', disabled: busy || !newName.trim(), onClick: submitCreate }, '创建'),
-                    h('button', { className: 'kb-btn kb-btn-sm', onClick: () => { setCreating(false); setNewName('') } }, '取消'),
+                    h('button', { className: 'kb-btn kb-btn-sm kb-btn-primary', disabled: busy || !newName.trim(), onClick: submitCreate }, t('side.create')),
+                    h('button', { className: 'kb-btn kb-btn-sm', onClick: () => { setCreating(false); setNewName('') } }, t('common.cancel')),
                   ),
                 )
               : null,
 
             h('div', { className: 'kb-side-list' },
               collections.length === 0
-                ? h('div', { className: 'kb-subtitle', style: { padding: '8px 10px' } }, '还没有知识库')
+                ? h('div', { className: 'kb-subtitle', style: { padding: '8px 10px' } }, t('side.empty'))
                 : collections.map((collection) => h('button', {
                     key: collection.id,
                     className: `kb-coll${collection.id === activeId ? ' kb-coll-on' : ''}`,
@@ -975,8 +1254,8 @@ window.__ModuleLoader__.load({
             activeId === null
               ? h('div', { className: 'kb-empty kb-fade-in' },
                   h(KnowledgeIcon, { size: 32 }),
-                  h('div', { className: 'kb-empty-title' }, '左侧还没有知识库'),
-                  h('div', { className: 'kb-empty-hint' }, '点左上角「+」新建一个，然后拖入文件。'),
+                  h('div', { className: 'kb-empty-title' }, t('empty.noCollection')),
+                  h('div', { className: 'kb-empty-hint' }, t('empty.noCollectionHint')),
                 )
               : h(React.Fragment, null,
 
@@ -992,9 +1271,9 @@ window.__ModuleLoader__.load({
                     onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click() },
                   },
                     h('div', { className: 'kb-drop-title' },
-                      dragging ? '松开即可导入' : busy ? '正在导入…' : '把文件拖到这里，或点击选择'),
+                      dragging ? t('drop.dragging') : busy ? t('drop.busy') : t('drop.title')),
                     h('div', { className: 'kb-drop-hint' },
-                      '支持 PDF、Word、PPT、Excel、Markdown、TXT、HTML · 单文件 ≤ 50MB'),
+                      t('drop.hint')),
                     h('input', {
                       ref: fileInputRef,
                       type: 'file',
@@ -1035,7 +1314,7 @@ window.__ModuleLoader__.load({
 
                     documents.length === 0
                       ? h('div', { className: 'kb-empty' },
-                          h('div', { className: 'kb-empty-hint' }, '这个知识库里还没有文档，拖一份进来试试。'),
+                          h('div', { className: 'kb-empty-hint' }, t('docs.empty')),
                         )
                       : h('div', { className: 'kb-docs kb-fade-in' },
                           documents.map((doc) => h('div', { key: doc.id, className: 'kb-doc' },
@@ -1054,10 +1333,10 @@ window.__ModuleLoader__.load({
                               }`,
                               title: doc.error ?? '',
                             },
-                              doc.status === 'ready' ? '已入库'
-                                : doc.status === 'needs-ocr' ? '需 OCR'
-                                : doc.status === 'failed' ? '失败'
-                                : '处理中',
+                              doc.status === 'ready' ? t('docs.statusReady')
+                                : doc.status === 'needs-ocr' ? t('docs.statusOcr')
+                                : doc.status === 'failed' ? t('docs.statusFailed')
+                                : t('docs.statusPending'),
                             ),
                             h('div', { className: 'kb-doc-actions' },
                               h('button', {
@@ -1065,11 +1344,11 @@ window.__ModuleLoader__.load({
                                 disabled: busy,
                                 onClick: () => reindexDocument(doc.id),
                                 title: '重新解析并切块',
-                              }, '重建'),
+                              }, t('docs.rebuild')),
                               h('button', {
                                 className: 'kb-btn kb-btn-sm kb-btn-danger',
                                 onClick: () => removeDocument(doc.id, doc.title),
-                              }, '删除'),
+                              }, t('common.delete')),
                             ),
                           )),
                         ),
@@ -1078,13 +1357,13 @@ window.__ModuleLoader__.load({
                   /* 检索测试 */
                   h('section', { className: 'kb-section' },
                     h('div', { className: 'kb-section-head' },
-                      h('h2', { className: 'kb-section-title' }, '检索测试'),
-                      h('span', { className: 'kb-section-meta' }, '验证入库效果'),
+                      h('h2', { className: 'kb-section-title' }, t('search.title')),
+                      h('span', { className: 'kb-section-meta' }, t('search.meta')),
                       searchMode?.mode
                         ? h('span', {
                             className: `kb-mode-chip${searchMode.mode === 'hybrid' ? ' kb-mode-ok' : ''}`,
                             style: { marginLeft: 'auto' },
-                          }, searchMode.mode === 'hybrid' ? '语义 + 关键词' : '仅关键词')
+                          }, searchMode.mode === 'hybrid' ? t('search.modeHybrid') : t('search.modeKeyword'))
                         : null,
                     ),
                     searchMode?.note
@@ -1093,7 +1372,7 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'kb-search-bar' },
                       h('input', {
                         className: 'kb-input',
-                        placeholder: '输入关键词，试试能不能查到…',
+                        placeholder: t('search.placeholder'),
                         value: query,
                         onChange: (e) => setQuery(e.target.value),
                         onKeyDown: (e) => { if (e.key === 'Enter') runSearch() },
@@ -1102,7 +1381,7 @@ window.__ModuleLoader__.load({
                         className: 'kb-btn kb-btn-primary',
                         disabled: searching || !query.trim(),
                         onClick: runSearch,
-                      }, searching ? '检索中' : '检索'),
+                      }, searching ? t('search.searching') : t('search.button')),
                     ),
 
                     hits !== null
@@ -1127,7 +1406,7 @@ window.__ModuleLoader__.load({
                                 ? h('button', {
                                     className: 'kb-hit-toggle',
                                     onClick: () => toggleExpand(hit.id),
-                                  }, expanded.has(hit.id) ? '收起' : '展开全文')
+                                  }, expanded.has(hit.id) ? t('common.collapse') : t('common.expandAll'))
                                 : null,
                             )),
                           )
@@ -1137,8 +1416,8 @@ window.__ModuleLoader__.load({
                   /* 设置 */
                   h('section', { className: 'kb-section' },
                     h('div', { className: 'kb-section-head' },
-                      h('h2', { className: 'kb-section-title' }, '检索设置'),
-                      h('span', { className: 'kb-section-meta' }, '接入嵌入模型，启用语义检索'),
+                      h('h2', { className: 'kb-section-title' }, t('embed.title')),
+                      h('span', { className: 'kb-section-meta' }, t('embed.meta')),
                     ),
                     h(SettingsPanel, {
                       collectionId: activeId,
@@ -1149,8 +1428,8 @@ window.__ModuleLoader__.load({
                   /* 重排设置 */
                   h('section', { className: 'kb-section' },
                     h('div', { className: 'kb-section-head' },
-                      h('h2', { className: 'kb-section-title' }, '重排设置'),
-                      h('span', { className: 'kb-section-meta' }, '从候选里精排，提高相关性（可选）'),
+                      h('h2', { className: 'kb-section-title' }, t('rerank.title')),
+                      h('span', { className: 'kb-section-meta' }, t('rerank.meta')),
                     ),
                     h(RerankPanel, {
                       collectionId: activeId,
@@ -1161,8 +1440,8 @@ window.__ModuleLoader__.load({
                   /* 抓取设置 */
                   h('section', { className: 'kb-section' },
                     h('div', { className: 'kb-section-head' },
-                      h('h2', { className: 'kb-section-title' }, '抓取设置'),
-                      h('span', { className: 'kb-section-meta' }, '联网取权威资料，含来源清单与防护'),
+                      h('h2', { className: 'kb-section-title' }, t('fetch.title')),
+                      h('span', { className: 'kb-section-meta' }, t('fetch.meta')),
                     ),
                     h(FetchPanel, null),
                   ),
@@ -1180,6 +1459,7 @@ window.__ModuleLoader__.load({
      */
     function SidePane() {
       useStyles()
+      const t = useT()
 
       const [status, setStatus] = useState(null)
       const [collections, setCollections] = useState([])
@@ -1297,7 +1577,7 @@ window.__ModuleLoader__.load({
                       ? h('button', {
                           className: 'kb-hit-toggle',
                           onClick: () => toggleExpand(hit.id),
-                        }, expanded.has(hit.id) ? '收起' : '展开')
+                        }, expanded.has(hit.id) ? t('common.collapse') : t('common.expand'))
                       : null,
                   )),
                 ),
@@ -1491,6 +1771,7 @@ window.__ModuleLoader__.load({
     /* ══════════════════════════ 设置面板 ══════════════════════════ */
 
     function SettingsPanel({ collectionId, onChanged }) {
+      const t = useT()
       const [config, setConfig] = useState(null)
       const [embedStatus, setEmbedStatus] = useState(null)
       const [apiKey, setApiKey] = useState('')
@@ -1646,15 +1927,15 @@ window.__ModuleLoader__.load({
 
         /* 嵌入方式 */
         h('div', { className: 'kb-field' },
-          h('label', { className: 'kb-field-label' }, '嵌入方式'),
+          h('label', { className: 'kb-field-label' }, t('embed.way')),
           h('select', {
             className: 'kb-select',
             value: config.provider,
             onChange: (e) => patchProvider(e.target.value),
           },
-            h('option', { value: 'none' }, '不使用（仅关键词检索）'),
-            h('option', { value: 'api' }, 'API / 本地服务（OpenAI 兼容）'),
-            h('option', { value: 'local' }, '本地模型（需先下载）'),
+            h('option', { value: 'none' }, t('embed.none')),
+            h('option', { value: 'api' }, t('embed.api')),
+            h('option', { value: 'local' }, t('embed.local')),
           ),
         ),
 
@@ -1675,7 +1956,7 @@ window.__ModuleLoader__.load({
 
               /* 服务商预设 */
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '服务商'),
+                h('label', { className: 'kb-field-label' }, t('embed.provider')),
                 h('select', {
                   className: 'kb-select',
                   value: providerId,
@@ -1690,7 +1971,7 @@ window.__ModuleLoader__.load({
               ),
 
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '服务地址'),
+                h('label', { className: 'kb-field-label' }, t('embed.baseUrl')),
                 h('input', {
                   className: 'kb-input',
                   placeholder: 'https://api.example.com/v1',
@@ -1706,7 +1987,7 @@ window.__ModuleLoader__.load({
               /* 模型：有预设列表就下拉选，否则手填；两种情况都可手动改 */
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' },
-                  '模型',
+                  t('embed.model'),
                   currentPreset?.models?.length
                     ? h('span', { className: 'kb-mode-chip', style: { marginLeft: 8 } },
                         `${currentPreset.models.length} 个可选`)
@@ -1754,7 +2035,7 @@ window.__ModuleLoader__.load({
 
               h('div', { className: 'kb-field' },
                 h('label', { className: 'kb-field-label' },
-                  'API Key',
+                  t('embed.apiKey'),
                   config.api.hasKey
                     ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 8 } }, '已保存')
                     : null,
@@ -1781,7 +2062,7 @@ window.__ModuleLoader__.load({
               ),
 
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '批大小'),
+                h('label', { className: 'kb-field-label' }, t('embed.batchSize')),
                 h('input', {
                   className: 'kb-input',
                   type: 'number',
@@ -1800,21 +2081,21 @@ window.__ModuleLoader__.load({
             className: 'kb-btn',
             disabled: busy !== '',
             onClick: save,
-          }, busy === 'save' ? '保存中…' : '保存'),
+          }, busy === 'save' ? t('common.saving') : t('common.save')),
 
           config.provider === 'api'
             ? h('button', {
                 className: 'kb-btn',
                 disabled: busy !== '',
                 onClick: test,
-              }, busy === 'test' ? '测试中…' : '测试连接')
+              }, busy === 'test' ? t('common.testing') : t('common.test'))
             : null,
 
           h('button', {
             className: 'kb-btn kb-btn-primary',
             disabled: busy !== '' || !embedStatus?.configured,
             onClick: buildIndex,
-          }, busy === 'build' ? '建立中…' : '建立向量索引'),
+          }, busy === 'build' ? t('embed.building') : t('embed.build')),
         ),
 
         building
@@ -1830,6 +2111,7 @@ window.__ModuleLoader__.load({
     /* ══════════════════════════ 本地模型选择器 ══════════════════════════ */
 
     function LocalModelPicker({ collectionId, config, patchLocal, onChanged }) {
+      const t = useT()
       const [catalog, setCatalog] = useState([])
       const [installed, setInstalled] = useState([])
       const [mirrors, setMirrors] = useState([])
@@ -1997,7 +2279,7 @@ window.__ModuleLoader__.load({
 
         /* 镜像选择 */
         h('div', { className: 'kb-field' },
-          h('label', { className: 'kb-field-label' }, '下载镜像'),
+          h('label', { className: 'kb-field-label' }, t('models.mirror')),
           h('select', {
             className: 'kb-select',
             value: config.local.mirror ?? 'hf-mirror',
@@ -2012,7 +2294,7 @@ window.__ModuleLoader__.load({
 
         /* 模型列表 */
         h('div', { className: 'kb-field' },
-          h('label', { className: 'kb-field-label' }, '本地模型'),
+          h('label', { className: 'kb-field-label' }, t('models.title')),
           h('div', { className: 'kb-model-list' },
             catalog.map((m) => {
               const done = isInstalled(m.id)
@@ -2025,7 +2307,7 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'kb-model-name' },
                     m.name,
                     done
-                      ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 6 } }, '已下载')
+                      ? h('span', { className: 'kb-mode-chip kb-mode-ok', style: { marginLeft: 6 } }, t('models.downloaded'))
                       : null,
                   ),
                   h('div', { className: 'kb-model-sub' },
@@ -2041,18 +2323,18 @@ window.__ModuleLoader__.load({
                             patchLocal({ modelId: m.id, dimension: m.dim })
                             onChanged?.()
                           },
-                        }, selected ? '已选中' : '选用'),
+                        }, selected ? t('models.selected') : t('models.use')),
                         h('button', {
                           className: 'kb-btn kb-btn-sm kb-btn-danger',
                           disabled: busy !== '',
                           onClick: () => remove(m.id),
-                        }, '删除'),
+                        }, t('common.delete')),
                       )
                     : h('button', {
                         className: 'kb-btn kb-btn-sm kb-btn-primary',
                         disabled: busy !== '',
                         onClick: () => download(m.id),
-                      }, '下载'),
+                      }, t('models.download')),
                 ),
               )
             }),
@@ -2093,6 +2375,7 @@ window.__ModuleLoader__.load({
     ]
 
     function RerankPanel({ collectionId, onChanged }) {
+      const t = useT()
       const [config, setConfig] = useState(null)
       const [presetId, setPresetId] = useState('custom')
       const [busy, setBusy] = useState('')
@@ -2179,14 +2462,14 @@ window.__ModuleLoader__.load({
           : null,
 
         h('div', { className: 'kb-field' },
-          h('label', { className: 'kb-field-label' }, '重排方式'),
+          h('label', { className: 'kb-field-label' }, t('rerank.way')),
           h('select', {
             className: 'kb-select',
             value: config.provider,
             onChange: (e) => setConfig((cur) => ({ ...cur, provider: e.target.value })),
           },
-            h('option', { value: 'none' }, '不使用（直接返回融合结果）'),
-            h('option', { value: 'api' }, 'API（OpenAI 兼容 /rerank）'),
+            h('option', { value: 'none' }, t('rerank.none')),
+            h('option', { value: 'api' }, t('rerank.api')),
           ),
           h('div', { className: 'kb-field-hint' },
             '重排会再发一次请求，能显著提升相关性，但会增加一点延迟和费用。'),
@@ -2195,7 +2478,7 @@ window.__ModuleLoader__.load({
         config.provider === 'api'
           ? h(React.Fragment, null,
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '服务商'),
+                h('label', { className: 'kb-field-label' }, t('embed.provider')),
                 h('select', {
                   className: 'kb-select',
                   value: presetId,
@@ -2204,7 +2487,7 @@ window.__ModuleLoader__.load({
               ),
 
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '服务地址'),
+                h('label', { className: 'kb-field-label' }, t('embed.baseUrl')),
                 h('input', {
                   className: 'kb-input',
                   placeholder: 'https://api.siliconflow.cn/v1',
@@ -2226,7 +2509,7 @@ window.__ModuleLoader__.load({
               ),
 
               h('div', { className: 'kb-field' },
-                h('label', { className: 'kb-field-label' }, '保留条数'),
+                h('label', { className: 'kb-field-label' }, t('rerank.topN')),
                 h('input', {
                   className: 'kb-input',
                   type: 'number',
@@ -2241,10 +2524,10 @@ window.__ModuleLoader__.load({
 
         h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
           h('button', { className: 'kb-btn', disabled: busy !== '', onClick: save },
-            busy === 'save' ? '保存中…' : '保存'),
+            busy === 'save' ? t('common.saving') : t('common.save')),
           config.provider === 'api'
             ? h('button', { className: 'kb-btn', disabled: busy !== '', onClick: test },
-                busy === 'test' ? '测试中…' : '测试连接')
+                busy === 'test' ? t('common.testing') : t('common.test'))
             : null,
         ),
       )
@@ -2255,6 +2538,7 @@ window.__ModuleLoader__.load({
     /* ══════════════════════════ 抓取设置 ══════════════════════════ */
 
     function FetchPanel() {
+      const t = useT()
       const [config, setConfig] = useState(null)
       const [sources, setSources] = useState([])
       const [busy, setBusy] = useState('')
@@ -2317,7 +2601,7 @@ window.__ModuleLoader__.load({
         /* 总开关 */
         h('div', { className: 'kb-status-line' },
           h('span', { className: config.enabled ? 'kb-dot kb-dot-on' : 'kb-dot' }),
-          h('span', null, config.enabled ? '已允许联网抓取' : '已关闭（完全不联网）'),
+          h('span', null, config.enabled ? t('fetch.on') : t('fetch.off')),
           h('button', {
             className: 'kb-btn kb-btn-sm',
             style: { marginLeft: 'auto' },
@@ -2333,7 +2617,7 @@ window.__ModuleLoader__.load({
 
         /* 可选白名单 */
         h('div', { className: 'kb-field' },
-          h('label', { className: 'kb-field-label' }, '站点白名单（可留空）'),
+          h('label', { className: 'kb-field-label' }, t('fetch.whitelist')),
           h('textarea', {
             className: 'kb-textarea',
             rows: 3,
@@ -2349,7 +2633,7 @@ window.__ModuleLoader__.load({
 
         h('div', { style: { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' } },
           h('button', { className: 'kb-btn', disabled: busy !== '', onClick: () => save() },
-            busy === 'save' ? '保存中…' : '保存'),
+            busy === 'save' ? t('common.saving') : t('common.save')),
           h('button', {
             className: 'kb-btn',
             onClick: () => setShowSources((v) => !v),
@@ -2384,6 +2668,31 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
+        /*
+         * 注册界面字典并接上翻译函数。
+         * 若 locale 服务不可用（或字典缺 key），回落到内置中文，
+         * 避免界面上直接露出 header.title 这种原始 key。
+         */
+        try {
+          const locale = ctx.locale
+          if (locale?.register) {
+            for (const [localeId, dict] of Object.entries(DICT)) {
+              locale.register(LOCALE_NS, localeId, dict)
+            }
+            const bound = locale.bind?.(LOCALE_NS)
+            setTranslator((key, params) => {
+              const raw = bound ? bound(key) : undefined
+              const value = raw && raw !== key ? raw : (DICT.zh[key] ?? key)
+              return fmt(value, params)
+            })
+          } else {
+            setTranslator((key, params) => fmt(DICT.zh[key] ?? key, params))
+          }
+        } catch {
+          // 注册失败时仍用中文，不影响功能
+          setTranslator((key, params) => fmt(DICT.zh[key] ?? key, params))
+        }
+
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             {

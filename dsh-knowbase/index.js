@@ -37,8 +37,8 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.3.0'
-const STAGE = 'P3'
+const VERSION = '0.4.0'
+const STAGE = 'P5'
 
 /** 单文件大小上限：50MB */
 const MAX_FILE_BYTES = 50 * 1024 * 1024

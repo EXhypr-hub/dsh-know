@@ -1,7 +1,8 @@
 {
   "meta": {
     "title": "本地知识库",
-    "description": "用你自己的文档建立知识库。把 PDF、Word、PPT、Excel 拖进来，或让智能体从权威来源采集资料。回答时给出原文片段、文档名和页码，所有文件都留在本机。"
+    "description": "用你自己的文档建立知识库。把 PDF、Word、PPT、Excel 拖进来，或让智能体从权威来源采集资料。回答时给出原文片段、文档名和页码，所有文件都留在本机。",
+    "detail": "docs/DETAIL.md"
   },
   "panel": {
     "title": "本地知识库",
