@@ -48,7 +48,7 @@ description:
   en: Local knowledge base with hybrid keyword and vector search, five agent tools, and citation-ready excerpts.
   zh: 本地知识库：关键词与向量混合检索，提供五个智能体工具，返回带书名与页码的原文片段。
 tarball: https://github.com/EXhypr-hub/dsh-know/releases/latest/download/dsh-knowbase.tgz
-icon: https://raw.githubusercontent.com/EXhypr-hub/dsh-know/main/dsh-knowbase/icon.svg
+icon: https://raw.githubusercontent.com/EXhypr-hub/dsh-know/main/dsh-knowbase/icon-180.png
 ```
 
 ### 关于 `category`
@@ -68,7 +68,21 @@ icon: https://raw.githubusercontent.com/EXhypr-hub/dsh-know/main/dsh-knowbase/ic
 
 ### 关于 `icon`
 
-用仓库里的 `icon.svg` 原始链接即可（指南允许 SVG）。
+- 指南要求是**位图**（raster），不是 SVG。已用 `npm run icon` 从 `icon.svg` 渲染出 `icon-180.png`（180×180，6.6KB）。
+- 用 `raw.githubusercontent.com` 官方地址，不写第三方 CDN——市场 CI 校验与用户加载都在正常网络下，官方域名最稳。
+- **如果 CI 提示图标取不到**，换成 jsdelivr：
+  ```
+  https://cdn.jsdelivr.net/gh/EXhypr-hub/dsh-know@main/dsh-knowbase/icon-180.png
+  ```
+- 图标整体是可选的：不写就回退到作者头像，不会因此被拒。
+
+### 本机网络注意
+
+2026-11-17 实测本机：`github.com` 完全不通，`raw.githubusercontent.com` 时通时不通，
+只有 `gh-proxy.com` 稳定。这是本地网络环境问题，**不影响市场条目本身**——
+条目里的 URL 会由市场服务器与用户浏览器去取。
+
+本机要下载 Release 文件的话，用 [下载加速](../README.md#下载加速) 那一节的办法。
 
 ## 提交前的自检
 
