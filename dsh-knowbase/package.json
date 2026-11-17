@@ -44,7 +44,8 @@
     "build:all": "node scripts/build-release.mjs --all",
     "publish:check": "node scripts/publish-check.mjs",
     "download": "node scripts/download-release.mjs",
-    "download:check": "node scripts/download-release.mjs --check"
+    "download:check": "node scripts/download-release.mjs --check",
+    "icon": "node scripts/make-icon.mjs"
   },
   "files": [
     "index.js",
@@ -56,7 +57,8 @@
     "docs",
     "README.md",
     "scripts/slim.mjs",
-    "scripts/download-release.mjs"
+    "scripts/download-release.mjs",
+    "icon-180.png"
   ],
   "engines": {
     "node": ">=22.12.0",
