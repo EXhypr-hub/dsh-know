@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-base);
   font-size: 13px;
@@ -295,8 +296,11 @@ window.__ModuleLoader__.load({
   .kb-drop-on { transform: none; }
 }
 
-/* ── 侧栏图标 ── */
+/* ── 侧栏图标：撑满按钮格 ── */
 .kb-icon { display: block; width: 100%; height: 100%; color: inherit; }
+
+/* ── 内容区图标：按传入尺寸固定，不撑满 ── */
+.kb-icon-fixed { display: block; color: inherit; flex: none; }
 `
 
     function useStyles() {
@@ -312,10 +316,18 @@ window.__ModuleLoader__.load({
 
     /* ══════════════════════════ 图标 ══════════════════════════ */
 
-    function KnowledgeIcon({ size = 20, active = false }) {
+    /**
+     * 书页图标。
+     * @param size    图标边长（px）。fill=true 时忽略，改为撑满父容器。
+     * @param fill    侧栏按钮用：撑满整个格子
+     * @param active  选中态加粗描边
+     */
+    function KnowledgeIcon({ size = 20, active = false, fill = false }) {
       return h('svg', {
-        className: 'kb-icon',
-        width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+        className: fill ? 'kb-icon' : 'kb-icon-fixed',
+        width: fill ? undefined : size,
+        height: fill ? undefined : size,
+        viewBox: '0 0 24 24', fill: 'none',
         'aria-hidden': true, stroke: 'currentColor',
         strokeWidth: active ? 1.9 : 1.6,
         strokeLinecap: 'round', strokeLinejoin: 'round',
@@ -842,7 +854,11 @@ window.__ModuleLoader__.load({
               order: 30,
               label: () => '知识库',
             },
-            (props) => h(KnowledgeIcon, { size: props?.size ?? 20, active: props?.active === true }),
+            (props) => h(KnowledgeIcon, {
+              size: typeof props?.size === 'number' ? props.size : 20,
+              active: props?.active === true,
+              fill: true,
+            }),
           ),
         )
 
