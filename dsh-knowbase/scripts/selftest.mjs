@@ -1669,6 +1669,41 @@ await test('测速使用界面当前配置，不依赖已保存', async () => {
   ok('测速使用界面当前配置，不依赖已保存', 'override 优先，未传时回落，依赖数组已含 config')
 })
 
+await test('按钮 ↔ 后端 全量对照', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+
+  const run = (script) => {
+    const path = fileURLToPath(new URL(`./${script}`, import.meta.url))
+    const cwd = fileURLToPath(new URL('..', import.meta.url))
+    try {
+      return { ok: true, out: execFileSync(process.execPath, [path], { encoding: 'utf8', cwd }) }
+    } catch (error) {
+      return { ok: false, out: String(error.stdout ?? error.message) }
+    }
+  }
+
+  // 1. 前端每一处 api() 调用，后端都要有对应路由与动作
+  const routes = run('check-routes.mjs')
+  if (!routes.ok || !/✅ 全部 \d+ 组/.test(routes.out)) {
+    const detail = routes.out.split('\n').filter((l) => /❌|\[/.test(l)).slice(0, 5).join('\n')
+    throw new Error(`路由对不上：\n${detail || routes.out.slice(0, 200)}`)
+  }
+
+  // 2. 每个按钮的 onClick 都要有实际动作
+  const buttons = run('check-buttons.mjs')
+  const summary = buttons.out.match(/共识别 (\d+) 个按钮[\s\S]*?(\d+) 个有实际动作，(\d+) 个可疑/)
+  if (!summary) throw new Error(`按钮检查没输出统计：${buttons.out.slice(0, 200)}`)
+  const total = Number(summary[1])
+  const bad = Number(summary[3])
+  if (bad > 0) {
+    const detail = buttons.out.split('可疑按钮：')[1]?.trim().slice(0, 300) ?? ''
+    throw new Error(`${bad}/${total} 个按钮的 onClick 没有实际动作：\n${detail}`)
+  }
+
+  ok('按钮 ↔ 后端 全量对照', `${total} 个按钮全部有动作，前后端组合全部对得上`)
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

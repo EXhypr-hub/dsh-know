@@ -50,3 +50,7 @@ dsh-knowbase/node_modules/
 
 # 发布产物（由 scripts/build-release.mjs 生成，不入库）
 release/
+
+# 发布产物误放到根目录时也要挡住
+*.zip
+*.tgz

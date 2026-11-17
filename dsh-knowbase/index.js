@@ -2110,11 +2110,14 @@ export function apply(ctx, config) {
         const created = kb.createCollection(body.name, body.description)
         return json({ ok: true, value: created })
       }
+      if (body.action === 'list') {
+        return json({ ok: true, value: kb.listCollections() })
+      }
       if (body.action === 'delete') {
         kb.deleteCollection(Number(body.id))
         return json({ ok: true, value: { deleted: true } })
       }
-      return json({ ok: true, value: kb.listCollections() })
+      return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
     route('/api/dsh-knowbase/documents', (body) => {

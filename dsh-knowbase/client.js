@@ -5235,7 +5235,8 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         let cancelled = false
-        api('chunks', { id: documentId })
+        // 切块挂在 documents 路由的 chunks 动作下，不是独立的 /chunks 路径
+        api('documents', { action: 'chunks', id: documentId })
           .then((value) => { if (!cancelled) setChunks(value ?? []) })
           .catch((err) => { if (!cancelled) setError(err.message) })
         return () => { cancelled = true }
