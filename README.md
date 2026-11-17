@@ -27,6 +27,7 @@
 - [功能一览](#功能一览)
 - [系统要求](#系统要求)
 - [安装](#安装)
+- [下载加速](#下载加速)
 - [快速上手](#快速上手)
 - [模型接入](#模型接入)
 - [联网抓取](#联网抓取)
@@ -146,17 +147,76 @@ npm run slim:restore # 想还原时
 
 适合不方便联网装依赖的机器。
 
-1. 到 [Releases](https://github.com/EXhypr-hub/dsh-know/releases/latest) 下载 `dsh-knowbase-offline.zip`（约 151MB）
+1. 到 [Releases](https://github.com/EXhypr-hub/dsh-know/releases/latest) 下载 `dsh-knowbase-offline.zip`（约 157MB）
 2. 解压到任意位置，得到一个 `dsh-knowbase` 文件夹
 3. DSH → 左侧「插件」→「添加插件」→ 选择这个 `dsh-knowbase` 文件夹
 
 离线包已经内置全部依赖，**不需要联网装依赖**，解压即用。
+
+> 如果下载慢或打不开，看下面的[下载加速](#下载加速)。
 
 ### 方式三：从本地目录安装（开发用）
 
 1. 下载本仓库源码，解压到任意位置
 2. 进入 `dsh-knowbase` 目录跑一次 `npm install`
 3. DSH → 左侧「插件」→「添加插件」→ 选择 `dsh-knowbase` 文件夹
+
+---
+
+## 下载加速
+
+国内访问 `github.com` 经常超时（但 `api.github.com`、`raw.githubusercontent.com`、
+`objects.githubusercontent.com` 通常都是通的，卡住的往往只有 `github.com` 这一个门）。
+
+### 办法一：用脚本自动下载（推荐）
+
+脚本会依次测几个加速器，挑第一个能用的去下，并显示进度与速度：
+
+```bash
+cd dsh-knowbase
+node scripts/download-release.mjs                    # 看看有哪些文件
+node scripts/download-release.mjs dsh-knowbase.tgz   # 下指定文件
+node scripts/download-release.mjs --all              # 全部下载
+node scripts/download-release.mjs --check            # 只测加速器连通性
+```
+
+### 办法二：手动拼加速前缀
+
+在原始链接前面加一个加速站前缀即可：
+
+| 加速站 | 用法 |
+|---|---|
+| `gh-proxy.com` | `https://gh-proxy.com/` + 原始链接 |
+| `ghfile.geekertao.top` | `https://ghfile.geekertao.top/` + 原始链接 |
+
+例如离线包的原始链接是：
+
+```
+https://github.com/EXhypr-hub/dsh-know/releases/download/v0.6.1/dsh-knowbase-offline.zip
+```
+
+用加速器下载就变成：
+
+```
+https://gh-proxy.com/https://github.com/EXhypr-hub/dsh-know/releases/download/v0.6.1/dsh-knowbase-offline.zip
+```
+
+> 实测速度约 **1.95 MB/s**，157MB 的离线包约 80 秒下完。
+> 加速站是第三方服务，可用性会变；一个不行就换另一个，或直接跑上面的脚本让它自己挑。
+
+### 办法三：git 操作加速
+
+如果 `git clone` / `git push` 也卡，SSH 走 443 端口通常比 22 端口稳：
+
+```bash
+# ~/.ssh/config
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+```
+
+---
 
 ### 安装后
 

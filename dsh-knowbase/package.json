@@ -42,7 +42,9 @@
     "build:tgz": "node scripts/build-release.mjs --tgz",
     "build:offline": "node scripts/build-release.mjs --offline",
     "build:all": "node scripts/build-release.mjs --all",
-    "publish:check": "node scripts/publish-check.mjs"
+    "publish:check": "node scripts/publish-check.mjs",
+    "download": "node scripts/download-release.mjs",
+    "download:check": "node scripts/download-release.mjs --check"
   },
   "files": [
     "index.js",
@@ -53,7 +55,8 @@
     "icon.svg",
     "docs",
     "README.md",
-    "scripts/slim.mjs"
+    "scripts/slim.mjs",
+    "scripts/download-release.mjs"
   ],
   "engines": {
     "node": ">=22.12.0",
