@@ -51,7 +51,7 @@ export function extractKbRefs(text, options = {}) {
     let name = ''
 
     if (known !== null) {
-      // 已知库名：取最长匹配，避免「粉毛」把「粉毛拉丁」吃掉
+      // 已知库名：取最长匹配，避免 short 把 longer 吃掉
       const hit = known.find((n) => source.startsWith(n, nameStart))
       if (hit !== undefined) name = hit
     }

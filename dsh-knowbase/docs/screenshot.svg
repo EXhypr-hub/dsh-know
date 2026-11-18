@@ -18,7 +18,7 @@
     <rect x="40" y="62" width="1040" height="404" rx="14" fill="url(#panel)" stroke="#2b323d"/>
     <circle cx="72" cy="94" r="10" fill="url(#brand)" opacity="0.9"/>
     <text x="92" y="99" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="15" fill="#e9edf3" font-weight="600">知识库</text>
-    <text x="150" y="99" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">3 个库 · 2 份文档 · 725 片段</text>
+    <text x="150" y="99" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">2 个库 · 2 份文档 · 486 片段</text>
     <rect x="940" y="82" width="52" height="24" rx="7" fill="#242b36" stroke="#333c49"/>
     <text x="950" y="98" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">设置</text>
     <rect x="1000" y="82" width="52" height="24" rx="7" fill="#242b36" stroke="#333c49"/>
@@ -26,13 +26,13 @@
     <rect x="40" y="120" width="1040" height="1" fill="#252b35"/>
     <rect x="68" y="140" width="200" height="74" rx="10" fill="#212731" stroke="#3a4657"/>
     <rect x="68" y="140" width="3" height="74" rx="1.5" fill="url(#brand)"/>
-    <text x="86" y="164" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="12.5" fill="#e9edf3" font-weight="600">粉毛</text>
-    <text x="86" y="184" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">1 份文档 · 596 片段</text>
-    <text x="86" y="202" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.75">128 页 · 已索引</text>
+    <text x="86" y="164" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="12.5" fill="#e9edf3" font-weight="600">产品文档</text>
+    <text x="86" y="184" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">1 份文档 · 312 片段</text>
+    <text x="86" y="202" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.75">48 页 · 已索引</text>
     <rect x="284" y="140" width="200" height="74" rx="10" fill="#1d232c" stroke="#2b323d"/>
-    <text x="302" y="164" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="12.5" fill="#e9edf3" font-weight="600" opacity="0.9">默认知识库</text>
-    <text x="302" y="184" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">1 份文档 · 129 片段</text>
-    <text x="302" y="202" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.75">6 页 · 已索引</text>
+    <text x="302" y="164" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="12.5" fill="#e9edf3" font-weight="600" opacity="0.9">技术手册</text>
+    <text x="302" y="184" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">1 份文档 · 174 片段</text>
+    <text x="302" y="202" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.75">26 页 · 已索引</text>
     <rect x="500" y="140" width="140" height="74" rx="10" fill="none" stroke="#333c49" stroke-dasharray="5 4"/>
     <text x="546" y="182" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">+ 新建库</text>
     <text x="68" y="248" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">文档</text>
@@ -40,14 +40,14 @@
     <rect x="40" y="258" width="1040" height="1" fill="#232932"/>
     <rect x="68" y="272" width="16" height="20" rx="3" fill="#2c3a4d"/>
     <text x="72" y="286" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#9aa5b5">P</text>
-    <text x="96" y="286" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#9aa5b5">粉毛拉丁·网哲TV1-2 观点全录·文献考据·论证核验（含补编）.pdf</text>
-    <text x="96" y="303" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">PDF · 128 页 · 596 个片段 · 1.2 MB</text>
+    <text x="96" y="286" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#9aa5b5">员工手册（2026 版）.pdf</text>
+    <text x="96" y="303" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">PDF · 48 页 · 312 个片段 · 2.1 MB</text>
     <circle cx="952" cy="283" r="4" fill="#4ec98a"/>
     <text x="964" y="287" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#4ec98a">已索引</text>
     <rect x="68" y="326" width="16" height="20" rx="3" fill="#2c3a4d"/>
     <text x="72" y="340" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#9aa5b5">P</text>
-    <text x="96" y="340" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#9aa5b5">2026级班委任职公示（软件26001-26010班）.pdf</text>
-    <text x="96" y="357" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">PDF · 6 页 · 129 个片段 · 320 KB</text>
+    <text x="96" y="340" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#9aa5b5">API 参考指南.pdf</text>
+    <text x="96" y="357" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">PDF · 26 页 · 174 个片段 · 860 KB</text>
     <circle cx="952" cy="337" r="4" fill="#4ec98a"/>
     <text x="964" y="341" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#4ec98a">已索引</text>
     <rect x="68" y="386" width="980" height="58" rx="10" fill="#191e25" stroke="#3a4657" stroke-dasharray="6 5"/>
@@ -61,20 +61,20 @@
   <g filter="url(#shadow)">
     <rect x="40" y="560" width="1040" height="212" rx="14" fill="url(#panel)" stroke="#2b323d"/>
     <rect x="700" y="582" width="352" height="38" rx="12" fill="#262d38"/>
-    <text x="716" y="606" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#dfe5ee">说说第一个视频的观点</text>
+    <text x="716" y="606" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="11.5" fill="#dfe5ee">这套文档里的试用期是多久？</text>
     <text x="60" y="600" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">◧ 上下文注入 · dsh-knowbase</text>
     <text x="60" y="620" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">⚙ 工具调用 · kb_search</text>
     <rect x="60" y="632" width="600" height="76" rx="9" fill="#1a1f27" stroke="#2b323d"/>
     <text x="74" y="650" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.85">输出</text>
-    <text x="74" y="668" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">6 条命中 · 粉毛</text>
-    <text x="74" y="684" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7f8b9c">[1]《粉毛拉丁·网哲TV1-2》· 10.5 一句话</text>
-    <text x="74" y="699" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7f8b9c">[2]《粉毛拉丁·网哲TV1-2》· 1.3 画面形态</text>
+    <text x="74" y="668" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">6 条命中 · 产品文档</text>
+    <text x="74" y="684" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7f8b9c">[1]《员工手册（2026 版）》· 第 12 页</text>
+    <text x="74" y="699" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7f8b9c">[2]《员工手册（2026 版）》· 第 13 页</text>
     <rect x="60" y="716" width="992" height="40" rx="11" fill="#1d232c" stroke="#333c49"/>
-    <rect x="72" y="726" width="86" height="21" rx="10.5" fill="#22303f" stroke="#4a6c96"/>
+    <rect x="72" y="726" width="100" height="21" rx="10.5" fill="#22303f" stroke="#4a6c96"/>
     <circle cx="84" cy="736.5" r="4" fill="url(#brand)"/>
-    <text x="92" y="740" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#c7d6ea">1  粉毛</text>
-    <text x="140" y="740" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">▾</text>
-    <text x="176" y="741" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.6">输入你的问题…</text>
+    <text x="92" y="740" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#c7d6ea">1  产品文档</text>
+    <text x="154" y="740" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798">▾</text>
+    <text x="190" y="741" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="10.5" fill="#7c8798" opacity="0.6">输入你的问题…</text>
     <circle cx="1022" cy="736" r="13" fill="url(#brand)"/>
     <path d="M1022 742 L1022 731 M1017 736 L1022 731 L1027 736" stroke="#ffffff" stroke-width="1.8" fill="none" stroke-linecap="round"/>
   </g>
