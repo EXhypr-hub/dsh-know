@@ -2037,6 +2037,45 @@ await test('检索摘要：前端展示', async () => {
   ok('检索摘要：前端展示', 'turnTail 卡片 + 收起态徽标，空数据不占位')
 })
 
+await test('注入不污染用户提问', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  /*
+   * 这条守的是一次体验问题：
+   * 最初把检索资料拼进最后一条 user 消息的 content，
+   * 结果用户在自己的提问下面看到一大段检索结果，提问被污染。
+   *
+   * 现在改为原消息不动、资料作为紧邻其后的独立消息进入上下文。
+   */
+
+  // 不允许再改写原消息的 content
+  if (/content: \[\s*\{ type: 'text', text: `\$\{head\}/.test(host)) {
+    throw new Error('仍在改写原用户消息，会污染提问')
+  }
+  if (/\.\.\.list\.slice\(0, -1\), next\]/.test(host)) {
+    throw new Error('仍在替换最后一条消息，应当追加而不是替换')
+  }
+
+  // 必须是"追加一条独立消息"
+  if (!/messages: \[\.\.\.list, contextMessage\]/.test(host)) {
+    throw new Error('没有把资料作为独立消息追加')
+  }
+  if (!/id: randomUUID\(\)/.test(host)) {
+    throw new Error('独立消息缺少合法 id')
+  }
+  if (!/source: \{ kind: 'user' \}/.test(host)) {
+    throw new Error('独立消息的 source 不合法')
+  }
+
+  // 原消息必须原样保留
+  if (!/const list = Array\.isArray\(messages\) \? messages : \[\]/.test(host)) {
+    throw new Error('取消息列表的方式变了，确认原消息还在')
+  }
+
+  ok('注入不污染用户提问', '原消息保留，资料作为紧随其后的独立消息进入上下文')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

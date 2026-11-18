@@ -1670,7 +1670,6 @@ this.store.deleteDocument(id)
     if (last?.role !== 'user' || !Array.isArray(last.content)) return null
 
     const textBlocks = last.content.filter((b) => b?.type === 'text' && typeof b.text === 'string')
-    const otherBlocks = last.content.filter((b) => b?.type !== 'text')
     if (textBlocks.length === 0) return null
 
     const combined = textBlocks.map((b) => b.text).join('\n')
@@ -1736,13 +1735,20 @@ this.store.deleteDocument(id)
     const injected = blocks.filter((b) => b !== '').join('\n\n')
     if (injected === '') return null
 
-    const head = question === '' ? '（用户只选了知识库，没有额外问题）' : question
-    const next = {
-      ...last,
-      content: [
-        { type: 'text', text: `${head}\n\n${injected}` },
-        ...otherBlocks,
-      ],
+    /*
+     * 关键：不再改动用户那条消息。
+     *
+     * 之前的做法是把资料拼进最后一条 user 消息的 content，
+     * 于是用户在自己的提问下面看到一大段检索结果，提问被"污染"了。
+     *
+     * 现在原消息一字不动，资料作为紧邻其后的一条独立消息进入上下文。
+     * 用户看到的提问仍是原话，模型拿到的资料一样完整。
+     */
+    const contextMessage = {
+      id: randomUUID(),
+      role: 'user',
+      content: [{ type: 'text', text: injected }],
+      source: { kind: 'user' },
     }
 
     /*
@@ -1751,7 +1757,10 @@ this.store.deleteDocument(id)
      */
     this.rememberTurnRecall(sessionId, turn, collections.map((c) => c.name), results)
 
-    return { messages: [...list.slice(0, -1), next], names: collections.map((c) => c.name) }
+    return {
+      messages: [...list, contextMessage],
+      names: collections.map((c) => c.name),
+    }
   }
 
   /* ────────────────────── 回合检索摘要 ────────────────────── */
