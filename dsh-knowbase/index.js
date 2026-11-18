@@ -26,7 +26,7 @@ import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
 import { sha256Of } from './lib/models.js'
 import { checkCore, describeCapabilities } from './lib/compat.js'
-import { KB_REF_PREFIX, stripKbRefs, formatInjection, formatFailureNote } from './lib/composer.js'
+import { KB_REF_PREFIX, stripKbRefs } from './lib/composer.js'
 import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
@@ -40,7 +40,7 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.6.6'
+const VERSION = '0.6.7'
 const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
@@ -1725,41 +1725,42 @@ this.store.deleteDocument(id)
 
     if (collections.length === 0 && failures.length === 0) return null
 
-    const blocks = []
-    if (collections.length > 0) {
-      blocks.push(formatInjection({ collections, results }))
-    }
-    if (failures.length > 0) {
-      blocks.push(formatFailureNote(names, failures.join('；')))
-    }
-    const injected = blocks.filter((b) => b !== '').join('\n\n')
-    if (injected === '') return null
-
     /*
-     * 关键：不再改动用户那条消息。
+     * 不再把资料铺进对话。
      *
-     * 之前的做法是把资料拼进最后一条 user 消息的 content，
-     * 于是用户在自己的提问下面看到一大段检索结果，提问被"污染"了。
+     * 之前把检索结果整段注入上下文，结果对话里出现一张巨大的
+     * 「【知识库资料】…」卡片，淹没正文、也无法折叠。
      *
-     * 现在原消息一字不动，资料作为紧邻其后的一条独立消息进入上下文。
-     * 用户看到的提问仍是原话，模型拿到的资料一样完整。
+     * 现在只给一句指令，让模型自己调用 kb_search——
+     * 工具调用会在对话里渲染成可折叠的「输入 / 输出」卡片，
+     * 资料落在「输出」里，过程留在思考流里，正文保持干净。
      */
-    const contextMessage = {
+    const scopeNames = collections.map((c) => c.name)
+    const quoted = (arr) => arr.map((n) => "\u300c" + n + "\u300d").join("\u3001")
+    const hint = failures.length > 0 && scopeNames.length === 0
+      ? "【知识库】用户本轮选了 " + quoted(names)
+        + "，但都不存在或无法读取（" + failures.join("；") + "）。"
+        + "请如实告知用户这次没有取到知识库，不要凭记忆编造。"
+      : "【知识库】用户本轮选了 " + quoted(scopeNames) + "。"
+        + "请先调用 kb_search 工具检索（query 填用户的问题；collection 可省略，会自动查选中的库），"
+        + "再基于返回的片段回答，并在每处结论后标注文档名与页码。"
+        + "资料不足以回答时，明确说明「资料中未提及」。"
+
+    const guidanceMessage = {
       id: randomUUID(),
       role: 'user',
-      content: [{ type: 'text', text: injected }],
+      content: [{ type: 'text', text: hint }],
       source: { kind: 'user' },
     }
 
     /*
-     * 记下这一轮的检索摘要，供对话页在回合尾部展示。
-     * 只留展示需要的字段，不存整段原文——摘要表要长期驻留内存。
+     * 记下这一轮的选库情况，供对话页在回合尾部展示。
+     * 命中详情由 kb_search 的工具卡片承担，这里只留库名。
      */
-    this.rememberTurnRecall(sessionId, turn, collections.map((c) => c.name), results)
-
+    this.rememberTurnRecall(sessionId, turn, scopeNames, [])
     return {
-      messages: [...list, contextMessage],
-      names: collections.map((c) => c.name),
+      messages: [...list, guidanceMessage],
+      names: scopeNames,
     }
   }
 

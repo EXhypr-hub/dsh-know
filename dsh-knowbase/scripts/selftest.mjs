@@ -2037,43 +2037,51 @@ await test('检索摘要：前端展示', async () => {
   ok('检索摘要：前端展示', 'turnTail 卡片 + 收起态徽标，空数据不占位')
 })
 
-await test('注入不污染用户提问', async () => {
+await test('注入只给指令，不给资料', async () => {
   const { readFileSync } = await import('node:fs')
   const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const tools = readFileSync(new URL('../lib/tools.js', import.meta.url), 'utf8')
 
   /*
-   * 这条守的是一次体验问题：
-   * 最初把检索资料拼进最后一条 user 消息的 content，
-   * 结果用户在自己的提问下面看到一大段检索结果，提问被污染。
-   *
-   * 现在改为原消息不动、资料作为紧邻其后的独立消息进入上下文。
+   * 这条守的是一条体验问题链：
+   *   ① 最初把资料拼进用户那条消息 → 提问被污染
+   *   ② 改成本地独立消息 → 对话里出现一张巨大的资料卡片，淹没正文、无法折叠
+   *   ③ 现在改为「只给一句指令，让模型自己调 kb_search」
+   *      工具调用会渲染成可折叠的输入/输出卡片，资料落在输出里
    */
 
-  // 不允许再改写原消息的 content
-  if (/content: \[\s*\{ type: 'text', text: `\$\{head\}/.test(host)) {
-    throw new Error('仍在改写原用户消息，会污染提问')
-  }
-  if (/\.\.\.list\.slice\(0, -1\), next\]/.test(host)) {
-    throw new Error('仍在替换最后一条消息，应当追加而不是替换')
+  // 不得再往上下文里塞资料正文
+  if (/formatInjection\(/.test(host)) {
+    throw new Error('仍在注入资料正文，会重新铺出那张大卡片')
   }
 
-  // 必须是"追加一条独立消息"
-  if (!/messages: \[\.\.\.list, contextMessage\]/.test(host)) {
-    throw new Error('没有把资料作为独立消息追加')
+  // 必须是"追加一条短指令消息"
+  if (!/messages: \[\.\.\.list, guidanceMessage\]/.test(host)) {
+    throw new Error('没有追加指令消息')
   }
-  if (!/id: randomUUID\(\)/.test(host)) {
-    throw new Error('独立消息缺少合法 id')
-  }
-  if (!/source: \{ kind: 'user' \}/.test(host)) {
-    throw new Error('独立消息的 source 不合法')
+  if (!/先调用 kb_search/.test(host)) {
+    throw new Error('指令里没让模型调 kb_search')
   }
 
-  // 原消息必须原样保留
-  if (!/const list = Array\.isArray\(messages\) \? messages : \[\]/.test(host)) {
-    throw new Error('取消息列表的方式变了，确认原消息还在')
+  // 指令要能带上选中的库名，并允许省略 collection
+  if (!/collection 可省略/.test(host)) {
+    throw new Error('指令没说明 collection 可省略')
   }
 
-  ok('注入不污染用户提问', '原消息保留，资料作为紧随其后的独立消息进入上下文')
+  // 工具侧：没传 collection 时回落到会话选中的库
+  if (!/kb\.composerScopes\?\.get\(String\(sessionId\)\)/.test(tools)) {
+    throw new Error('kb_search 没有回落到会话选中的库')
+  }
+  if (!/exec\?\.agent\?\.id/.test(tools)) {
+    throw new Error('kb_search 没从 exec 里取 sessionId')
+  }
+
+  // 多库时要说明范围，避免模型以为只查了一个库
+  if (!/scopeNote/.test(tools)) {
+    throw new Error('多选库时没有说明检索范围')
+  }
+
+  ok('注入只给指令，不给资料', '资料改由 kb_search 工具卡片承载，工具自动落到选中的库')
 })
 
 /* ───────────────── 收尾 ───────────────── */

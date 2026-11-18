@@ -149,8 +149,7 @@ export function registerTools(ctx, kb) {
       '在本地知识库中检索资料，返回原文片段、文档名与页码。'
       + '当用户问的问题可能在他自己的文档里时，必须先调用它，再基于结果回答，'
       + '并注明出处。宁可先查一次，也不要凭记忆编造。'
-      + '注意：如果本轮消息里已经出现【知识库资料】块，说明用户用 @ 选了知识库、'
-      + '资料已自动注入，不必再调用本工具。',
+      + '如果用户用输入框上方的「知识库」选了库，省略 collection 即在该库内检索。',
     parameters: {
       type: 'object',
       properties: {
@@ -175,15 +174,36 @@ export function registerTools(ctx, kb) {
       properties: {},
       additionalProperties: true,
     }),
-    execute: guarded('kb_search', async (args) => {
+    execute: guarded('kb_search', async (args, exec) => {
       const query = String(args.query ?? '').trim()
       if (!query) throw new Error('query 不能为空')
 
       let collectionId = null
+      let scopeNote = null
+
       if (args.collection) {
         const collection = kb.resolveCollection(args.collection)
         if (!collection) throw new Error(`找不到知识库「${args.collection}」`)
         collectionId = collection.id
+      } else {
+        /*
+         * 没指定库时，回落到用户在输入框上方选中的库。
+         *
+         * 这样模型按工具描述办事（只传 query）也能查到对的库，
+         * 不必知道用户选了哪个。
+         */
+        const sessionId = exec?.agent?.id
+        const picked = sessionId === undefined
+          ? []
+          : (kb.composerScopes?.get(String(sessionId))?.names ?? [])
+
+        if (picked.length === 1) {
+          const only = kb.resolveCollection(picked[0])
+          if (only) collectionId = only.id
+        } else if (picked.length > 1) {
+          // 多选时全局检索会混库，明确告诉调用方当前范围
+          scopeNote = `用户本轮选中了多个库：${picked.join('、')}；本次在全部库中检索`
+        }
       }
 
       const limit = Math.min(Math.max(Number(args.limit ?? 8), 1), 20)
@@ -207,6 +227,7 @@ export function registerTools(ctx, kb) {
         mode: result.mode,
         count: hits.length,
         note: result.note,
+        ...(scopeNote === null ? {} : { scopeNote }),
         hits,
         guidance: hits.length === 0
           ? '没有命中。可以换关键词再试，或如实告诉用户库里没有相关资料。'
