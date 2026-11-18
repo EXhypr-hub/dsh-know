@@ -51,6 +51,29 @@ function guarded(name, fn) {
   }
 }
 
+/** 把一条命中整理成模型可读的形状（多选库共用） */
+function hookOf(hit) {
+  return {
+    title: hit.title,
+    page: hit.page ?? null,
+    heading: hit.heading ?? null,
+    text: hit.text,
+    similarity: typeof hit.similarity === 'number'
+      ? Number(hit.similarity.toFixed(3))
+      : null,
+    rerankScore: typeof hit.rerankScore === 'number'
+      ? Number(hit.rerankScore.toFixed(4))
+      : null,
+  }
+}
+
+/** 命中为空与有命中时分别给模型的提示 */
+function guidanceOf(hits) {
+  return hits.length === 0
+    ? '没有命中。可以换关键词再试，或如实告诉用户库里没有相关资料。'
+    : '回答时请引用文档名与页码，例如「（《书名》第 3 页）」。'
+}
+
 /**
  * 注册五个知识库工具。
  * @param {object} ctx 插件上下文
@@ -62,6 +85,25 @@ export function registerTools(ctx, kb) {
 
   const register = (definition) => {
     disposers.push(ctx.tools.register(definition))
+  }
+
+  /*
+   * 回合摘要回填：kb_search 真正取到资料后，把命中写回本轮摘要，
+   * 让对话页的「知识库 · N 条」卡片显示实际结果而非永远为空。
+   * 会话/turn 取不到时静默跳过（直接在工具箱里调用的场景）。
+   */
+  const recordRecall = (exec, names, hits) => {
+    try {
+      const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id
+      if (sessionId === undefined) return
+      const turn = kb.currentTurnBySession?.get(String(sessionId))
+      if (turn === undefined) return
+      kb.mergeTurnRecallHits(String(sessionId), turn, names, [
+        { collection: names.join('、'), hits },
+      ])
+    } catch {
+      // 回填失败不影响工具结果
+    }
   }
 
   /* ─────────────── 1. kb_list：列库 / 列文档 / 看状态 ─────────────── */
@@ -178,60 +220,104 @@ export function registerTools(ctx, kb) {
       const query = String(args.query ?? '').trim()
       if (!query) throw new Error('query 不能为空')
 
-      let collectionId = null
+      const limit = Math.min(Math.max(Number(args.limit ?? 8), 1), 20)
       let scopeNote = null
 
       if (args.collection) {
+        // 显式指定单个库
         const collection = kb.resolveCollection(args.collection)
         if (!collection) throw new Error(`找不到知识库「${args.collection}」`)
-        collectionId = collection.id
-      } else {
-        /*
-         * 没指定库时，回落到用户在输入框上方选中的库。
-         *
-         * 这样模型按工具描述办事（只传 query）也能查到对的库，
-         * 不必知道用户选了哪个。
-         */
-        const sessionId = exec?.agent?.id
-        const picked = sessionId === undefined
-          ? []
-          : (kb.composerScopes?.get(String(sessionId))?.names ?? [])
-
-        if (picked.length === 1) {
-          const only = kb.resolveCollection(picked[0])
-          if (only) collectionId = only.id
-        } else if (picked.length > 1) {
-          // 多选时全局检索会混库，明确告诉调用方当前范围
-          scopeNote = `用户本轮选中了多个库：${picked.join('、')}；本次在全部库中检索`
+        const result = await kb.semanticSearch(query, { collectionId: collection.id, limit })
+        recordRecall(exec, [collection.name], result.hits ?? [])
+        return {
+          query,
+          mode: result.mode,
+          count: (result.hits ?? []).length,
+          note: result.note,
+          hits: (result.hits ?? []).map(hookOf),
+          guidance: guidanceOf(result.hits ?? []),
         }
       }
 
-      const limit = Math.min(Math.max(Number(args.limit ?? 8), 1), 20)
-      const result = await kb.semanticSearch(query, { collectionId, limit })
+      /*
+       * 没显式指定库时，回落到用户在输入框上方选中的库。
+       *
+       * 多选时不再退化为「在全部库中检索」——那会把用户没选的资料
+       * 也带进对话。改为对每个选中的库分别检索，按相似度合并后裁剪。
+       */
+      const sessionId = exec?.agent?.id
+      const picked = sessionId === undefined
+        ? []
+        : (kb.composerScopes?.get(String(sessionId))?.names ?? [])
 
-      const hits = (result.hits ?? []).map((hit) => ({
-        title: hit.title,
-        page: hit.page ?? null,
-        heading: hit.heading ?? null,
-        text: hit.text,
-        similarity: typeof hit.similarity === 'number'
-          ? Number(hit.similarity.toFixed(3))
-          : null,
-        rerankScore: typeof hit.rerankScore === 'number'
-          ? Number(hit.rerankScore.toFixed(4))
-          : null,
-      }))
+      if (picked.length === 1) {
+        const only = kb.resolveCollection(picked[0])
+        if (only) {
+          const result = await kb.semanticSearch(query, { collectionId: only.id, limit })
+          recordRecall(exec, [only.name], result.hits ?? [])
+          return {
+            query,
+            mode: result.mode,
+            count: (result.hits ?? []).length,
+            note: result.note,
+            hits: (result.hits ?? []).map(hookOf),
+            guidance: guidanceOf(result.hits ?? []),
+          }
+        }
+      }
 
+      if (picked.length > 1) {
+        const perCollection = []
+        for (const name of picked) {
+          const collection = kb.resolveCollection(name)
+          if (!collection) continue
+          try {
+            const found = await kb.semanticSearch(query, { collectionId: collection.id, limit })
+            for (const hit of found.hits ?? []) {
+              perCollection.push({ hit, collection: collection.name })
+            }
+          } catch {
+            // 单库失败不影响其他库
+          }
+        }
+
+        // 按相似度合并；keyword 模式没有相似度时保序
+        perCollection.sort((a, b) => {
+          const sa = a.hit?.similarity ?? -1
+          const sb = b.hit?.similarity ?? -1
+          return sb - sa
+        })
+        const merged = perCollection.slice(0, limit)
+
+        scopeNote = `在用户选中的 ${picked.length} 个库中检索：${picked.join('、')}`
+        recordRecall(exec, picked, merged.map((m) => m.hit))
+        return {
+          query,
+          mode: 'hybrid-multi',
+          count: merged.length,
+          scopeNote,
+          hits: merged.map(({ hit, collection }) => ({
+            ...hookOf(hit),
+            collection,
+          })),
+          perCollectionCount: picked.map((name) => ({
+            name,
+            count: merged.filter((m) => m.collection === name).length,
+          })),
+          guidance: guidanceOf(merged.map((m) => m.hit)),
+        }
+      }
+
+      // 既没指定也没选中：在全部库中检索（与旧版一致的兜底行为）
+      const result = await kb.semanticSearch(query, { collectionId: null, limit })
+      recordRecall(exec, [], result.hits ?? [])
       return {
         query,
         mode: result.mode,
-        count: hits.length,
+        count: (result.hits ?? []).length,
         note: result.note,
-        ...(scopeNote === null ? {} : { scopeNote }),
-        hits,
-        guidance: hits.length === 0
-          ? '没有命中。可以换关键词再试，或如实告诉用户库里没有相关资料。'
-          : '回答时请引用文档名与页码，例如「（《书名》第 3 页）」。',
+        hits: (result.hits ?? []).map(hookOf),
+        guidance: guidanceOf(result.hits ?? []),
       }
     }),
   })
@@ -273,10 +359,21 @@ export function registerTools(ctx, kb) {
         : kb.ensureDefaultCollection()
       if (!collection) throw new Error(`找不到知识库「${args.collection}」`)
 
+      /*
+       * 相对路径要按「用户的当前工作目录」解析，而不是 Host 进程的 cwd。
+       * exec 上可能带工作目录的字段因版本而异，逐层探测，取第一个可用的。
+       */
+      const cwd = exec?.agent?.session?.cwd
+        ?? exec?.agent?.cwd
+        ?? exec?.session?.cwd
+        ?? exec?.cwd
+        ?? undefined
+
       const results = await kb.ingestPaths({
         paths,
         collectionId: collection.id,
         sessionId: exec?.agent?.session?.id ?? exec?.agent?.id ?? null,
+        cwd,
       })
 
       return {

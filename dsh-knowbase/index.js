@@ -11,7 +11,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path'
+import { join, extname, dirname, basename, resolve, isAbsolute, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { readFile, writeFile, unlink, stat, statfs, readdir, rm, mkdir, copyFile } from 'node:fs/promises'
@@ -27,7 +27,7 @@ import { buildSkill } from './lib/skill.js'
 import { sha256Of } from './lib/models.js'
 import { checkCore, describeCapabilities } from './lib/compat.js'
 import { KB_REF_PREFIX, stripKbRefs } from './lib/composer.js'
-import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
+import { isPrivateHost, checkRobots, waitForSlot, resolvePublicHost } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
   createEmbedder,
@@ -291,6 +291,8 @@ class KnowledgeBase {
     /** 给人看的兼容性诊断 */
     this.capabilityNote = ''
     this.apiKeyCache = ''
+    /** OCR Key 缓存：null = 尚未从凭据通道加载 */
+    this.ocrKeyCache = null
     this.embedderCache = null
     this.rerankerCache = null
     this.downloadProgress = null
@@ -314,6 +316,7 @@ class KnowledgeBase {
    * @param {{ paths: string[], collectionId: number, sessionId?: string|null, cwd?: string }} input
    */
   async ingestPaths({ paths, collectionId, cwd, signal, task }) {
+    // 相对路径的解析基准：优先调用方传入，其次 Host 记录，最后进程 cwd
     const baseDir = cwd || this.lastCwd || process.cwd()
     const results = []
 
@@ -404,6 +407,44 @@ class KnowledgeBase {
    *   - 体积上限
    *   - 记录来源 URL 与抓取时间
    */
+  /**
+   * 校验一个 URL 是否允许抓取：协议、主机名字符串、DNS 解析结果、白名单。
+   * 每一跳重定向都要重新过这道门。
+   */
+  async #validateFetchUrl(href, policy) {
+    let parsed
+    try {
+      parsed = new URL(href)
+    } catch {
+      throw new Error('网址格式不正确')
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('只支持 http/https 网址')
+    }
+
+    // 内网地址一律拒绝，防止被诱导探测局域网
+    if (isPrivateHost(parsed.hostname)) {
+      throw new Error(`拒绝访问内网地址：${parsed.hostname}`)
+    }
+
+    // DNS 层校验：公网域名也可能解析到内网 IP（DNS rebinding）
+    const dns = await resolvePublicHost(parsed.hostname)
+    if (!dns.ok) {
+      throw new Error(`拒绝访问内网地址：${dns.reason}`)
+    }
+
+    // 可选白名单：只有用户明确填了才生效
+    if (policy.whitelist.length > 0) {
+      const host = parsed.hostname.toLowerCase()
+      const hit = policy.whitelist.some((w) => host === w || host.endsWith(`.${w}`))
+      if (!hit) {
+        throw new Error(`该站点不在白名单内（${host}）。可在「抓取设置」里添加或清空白名单。`)
+      }
+    }
+
+    return parsed
+  }
+
   async fetchSource({ url, collectionId, title, signal }) {
     // 1. 总开关：关着就完全不联网
     const policy = this.getFetchConfig()
@@ -413,55 +454,58 @@ class KnowledgeBase {
 
     this.throwIfAborted(signal, '抓取')
 
-    let parsed
-    try {
-      parsed = new URL(url)
-    } catch {
-      throw new Error('网址格式不正确')
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('只支持 http/https 网址')
-    }
+    // 2. 入口 URL：协议 / 内网 / DNS / 白名单 全套校验
+    let parsed = await this.#validateFetchUrl(url, policy)
 
-    // 2. 内网地址一律拒绝，防止被诱导探测局域网
-    if (isPrivateHost(parsed.hostname)) {
-      throw new Error(`拒绝访问内网地址：${parsed.hostname}`)
-    }
-
-    // 3. 可选白名单：只有用户明确填了才生效
-    if (policy.whitelist.length > 0) {
-      const host = parsed.hostname.toLowerCase()
-      const hit = policy.whitelist.some((w) => host === w || host.endsWith(`.${w}`))
-      if (!hit) {
-        throw new Error(`该站点不在白名单内（${host}）。可在「抓取设置」里添加或清空白名单。`)
-      }
-    }
-
-    // 4. 遵守 robots.txt
+    // 3. 遵守 robots.txt（对最终落点的主机也适用）
     const robots = await checkRobots(parsed.href)
     if (!robots.allowed) {
       throw new Error(`被站点规则拒绝：${robots.reason ?? 'robots.txt 不允许'}`)
     }
 
-    // 5. 同站点限速，别把人网站打垮
+    // 4. 同站点限速，别把人网站打垮
     await waitForSlot(parsed.hostname)
 
-    // 6. 已知权威来源：带上许可提示，便于回答时如实告知
-    const known = sourceForHost(parsed.hostname)
+    const entryOrigin = parsed.origin
 
+    /*
+     * 5. 手动跟随重定向（最多 5 跳）。
+     *
+     * 不能用 fetch 的 redirect: 'follow'：那会直接跳到目标而不给
+     * 校验函数机会，公网 URL 302 到 http://127.0.0.1 就绕过内网拦截了。
+     * 每一跳都重新执行全套校验（协议/内网/DNS/白名单）。
+     */
+    const MAX_REDIRECTS = 5
     let response
+    const headers = {
+      'user-agent': 'dsh-knowbase/0.4 (+local knowledge base)',
+      accept: 'text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5',
+    }
+
     try {
-      // 用户取消与 30 秒超时任一触发都会中断请求
-      const timeout = AbortSignal.timeout(30000)
-      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
-      response = await fetch(parsed.href, {
-        redirect: 'follow',
-        signal: combined,
-        headers: {
-          'user-agent': 'dsh-knowbase/0.4 (+local knowledge base)',
-          accept: 'text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5',
-        },
-      })
+      for (let hop = 0; ; hop++) {
+        this.throwIfAborted(signal, '抓取')
+        const timeout = AbortSignal.timeout(30000)
+        const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
+        response = await fetch(parsed.href, {
+          redirect: 'manual',
+          signal: combined,
+          headers,
+        })
+
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location')
+          if (!location) break
+          if (hop >= MAX_REDIRECTS - 1) throw new Error('重定向次数过多（超过 5 次），已中止')
+
+          // 每一跳都要重新过全套校验：协议/内网/DNS/白名单
+          const next = new URL(location, parsed.href)
+          parsed = await this.#validateFetchUrl(next.href, policy)
+          await waitForSlot(parsed.hostname)
+          continue
+        }
+        break
+      }
     } catch (error) {
       if (signal?.aborted) {
         const aborted = new Error('抓取已取消')
@@ -471,6 +515,18 @@ class KnowledgeBase {
       throw new Error(`抓取失败：${error instanceof Error ? error.message : String(error)}`)
     }
 
+    /*
+     * 6. 若重定向跨站，最终落点也要遵守它自己的 robots.txt；
+     *    来源标注也以最终落点为准。
+     */
+    if (parsed.origin !== entryOrigin) {
+      const finalRobots = await checkRobots(parsed.href)
+      if (!finalRobots.allowed) {
+        throw new Error(`被站点规则拒绝：${finalRobots.reason ?? 'robots.txt 不允许'}`)
+      }
+    }
+    const known = sourceForHost(parsed.hostname)
+
     if (!response.ok) {
       const hint = response.status === 401 || response.status === 403
         ? '（可能需要登录，插件不会绕过）'
@@ -478,14 +534,19 @@ class KnowledgeBase {
       throw new Error(`抓取失败：HTTP ${response.status}${hint}`)
     }
 
+    // 体积上限：优先用用户配置的 maxBytes（默认 100MB），不再写死
+    const maxBytes = Number.isFinite(policy.maxBytes) && policy.maxBytes > 0
+      ? Math.min(policy.maxBytes, 512 * 1024 * 1024)
+      : MAX_FILE_BYTES
+
     const declared = Number(response.headers.get('content-length') ?? 0)
-    if (declared > MAX_FILE_BYTES) {
-      throw new Error(`文件过大（${Math.round(declared / 1024 / 1024)}MB），上限 ${MAX_FILE_BYTES / 1024 / 1024}MB`)
+    if (declared > maxBytes) {
+      throw new Error(`文件过大（${Math.round(declared / 1024 / 1024)}MB），上限 ${Math.round(maxBytes / 1024 / 1024)}MB`)
     }
 
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.length === 0) throw new Error('抓到的内容为空')
-    if (buffer.length > MAX_FILE_BYTES) throw new Error('内容超过体积上限')
+    if (buffer.length > maxBytes) throw new Error('内容超过体积上限')
 
     const contentType = String(response.headers.get('content-type') ?? '').toLowerCase()
     const name = this.#nameForFetched(parsed, contentType, title)
@@ -494,6 +555,7 @@ class KnowledgeBase {
       name,
       buffer,
       collectionId,
+      maxBytes,
     })
 
     // 来源留痕：抓来的文档必须能追溯，并带上站点声明的许可
@@ -543,7 +605,23 @@ class KnowledgeBase {
     return `${stem}.${ext}`
   }
 
-  stop() {
+  async stop() {
+    /*
+     * 释放推理资源：本地 embedder/reranker 持有 ONNX pipeline，
+     * OCR 持有 tesseract worker，都是几十到几百 MB 的常驻内存。
+     * 只关 SQLite 会让这些留在进程里。
+     */
+    const caches = [this.embedderCache?.embedder, this.rerankerCache?.reranker, this.ocrCache?.engine]
+    for (const engine of caches) {
+      try {
+        await engine?.dispose?.()
+      } catch {
+        // 释放失败不影响关闭流程
+      }
+    }
+    this.embedderCache = null
+    this.rerankerCache = null
+    this.ocrCache = null
     this.store.close()
   }
 
@@ -630,12 +708,16 @@ class KnowledgeBase {
   deleteCollection(id) {
     const collection = this.store.getCollection(id)
     if (!collection) throw new Error('知识库不存在')
-    // 连带清理文件副本
+    // 连带清理文件副本：只删没有其他库引用的副本。
+    // 同一文件可以导入多个库（按 sha256 共享一份物理副本），
+    // 不能删了一个库就把别人还在用的原文件一起带走。
     const docs = this.store.listDocuments(id)
+    this.store.deleteCollection(id)
     for (const doc of docs) {
-      this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
+      if (this.store.countDocumentsByHash(doc.sha256, doc.ext, doc.id) === 0) {
+        this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
+      }
     }
-this.store.deleteCollection(id)
     this.invalidateVectorCache()
   }
 
@@ -649,16 +731,20 @@ this.store.deleteCollection(id)
 
   /**
    * 导入一个文件。
-   * @param {{ name: string, buffer: Buffer, collectionId: number }} input
+   * @param {{ name: string, buffer: Buffer, collectionId: number, maxBytes?: number }} input
    */
-  async importFile({ name, buffer, collectionId }) {
+  async importFile({ name, buffer, collectionId, maxBytes }) {
     if (!this.ready) throw new Error('知识库尚未就绪')
 
     const collection = this.store.getCollection(collectionId)
     if (!collection) throw new Error('目标知识库不存在')
 
-    if (buffer.length > MAX_FILE_BYTES) {
-      throw new Error(`文件过大（${Math.round(buffer.length / 1024 / 1024)}MB），上限 ${MAX_FILE_BYTES / 1024 / 1024}MB`)
+    // 抓取路径可传更大的上限（受 policy.maxBytes 约束）；默认仍是 50MB
+    const effectiveMax = Number.isFinite(maxBytes) && maxBytes > 0
+      ? Math.min(maxBytes, 512 * 1024 * 1024)
+      : MAX_FILE_BYTES
+    if (buffer.length > effectiveMax) {
+      throw new Error(`文件过大（${Math.round(buffer.length / 1024 / 1024)}MB），上限 ${Math.round(effectiveMax / 1024 / 1024)}MB`)
     }
 
     // 统一为不带点的小写扩展名（.DOCX → docx），避免后续比较出错
@@ -668,6 +754,34 @@ this.store.deleteCollection(id)
     const sha256 = this.store.hashOf(buffer)
     const duplicate = this.store.findDocumentByHash(collectionId, sha256)
     if (duplicate) {
+      /*
+       * 重复命中时不直接短路：
+       *   - ready       → 真正的重复，直接返回
+       *   - failed      → 上次解析失败，这次重试（可能换了依赖或文件已修）
+       *   - needs-ocr   → 上次没开 OCR；现在开了就就地补识别
+       * 否则扫描件会在「开 OCR 后重新导入」这条官方路径上永远走不通。
+       */
+      if (duplicate.status === 'ready') {
+        return { duplicate: true, documentId: duplicate.id, title: duplicate.title, chunkCount: duplicate.chunk_count }
+      }
+      if (duplicate.status === 'needs-ocr' && duplicate.ext === 'pdf') {
+        const ocrConfig = this.getOcrConfig()
+        if (ocrConfig.provider !== 'none') {
+          const outcome = await this.#ocrScannedDocument(duplicate.id, buffer, null)
+          return { ...outcome, retried: true }
+        }
+      }
+      if (duplicate.status === 'failed') {
+        // 落入下方的完整解析流程，复用已存在的文档记录
+        const outcome = await this.#parseAndStore({
+          docId: duplicate.id, buffer, ext, collectionId,
+        })
+        return { ...outcome, retried: true }
+      }
+      if (duplicate.status === 'needs-ocr') {
+        // OCR 未开启时保持待处理，返回明确提示而不是装作重复成功
+        return { duplicate: true, needsOcr: true, documentId: duplicate.id, title: duplicate.title, chunkCount: 0 }
+      }
       return { duplicate: true, documentId: duplicate.id, title: duplicate.title, chunkCount: duplicate.chunk_count }
     }
 
@@ -681,69 +795,7 @@ this.store.deleteCollection(id)
     })
 
     try {
-      const extracted = await extractDocument(buffer, ext)
-
-      // 扫描件：OCR 开着就当场识别，否则标记待处理
-      if (extracted.scanned) {
-        await this.store.saveFile(sha256, ext, buffer)
-
-        const ocrConfig = this.getOcrConfig()
-        if (ocrConfig.provider !== 'none' && ext === 'pdf') {
-          try {
-            this.store.updateDocumentStatus(docId, 'processing', { chunkCount: 0 })
-            const ocrText = await this.#ocrPdf(buffer, docId)
-            if (ocrText.trim() !== '') {
-              const ocrChunks = chunkSections([{ text: ocrText }])
-              if (ocrChunks.length > 0) {
-                this.store.replaceChunks(docId, ocrChunks)
-                this.store.updateDocumentStatus(docId, 'ready', {
-                  pageCount: extracted.meta?.pages ?? null,
-                  chunkCount: ocrChunks.length,
-                  error: null,
-                })
-                return { documentId: docId, scanned: true, ocr: true, chunkCount: ocrChunks.length }
-              }
-            }
-            // OCR 没认出字：退回待处理，并说明原因
-            this.store.updateDocumentStatus(docId, 'needs-ocr', {
-              error: 'OCR 已执行但没有识别出文字，可能是空白页或图片质量太低',
-              pageCount: extracted.meta?.pages ?? null,
-              chunkCount: 0,
-            })
-            return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
-          } catch (error) {
-            this.store.updateDocumentStatus(docId, 'needs-ocr', {
-              error: `OCR 失败：${error instanceof Error ? error.message : String(error)}`,
-              pageCount: extracted.meta?.pages ?? null,
-              chunkCount: 0,
-            })
-            return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
-          }
-        }
-
-        this.store.updateDocumentStatus(docId, 'needs-ocr', {
-          error: '该 PDF 没有文字层（扫描件）。到「OCR 设置」里开启识别，或在文档行点「重新解析」重试',
-          pageCount: extracted.meta?.pages ?? null,
-          chunkCount: 0,
-        })
-        return { documentId: docId, scanned: true, chunkCount: 0 }
-      }
-
-      const sections = extracted.sections.filter((s) => s.text && s.text.trim())
-      if (sections.length === 0) throw new Error('文档中没有可提取的文字')
-
-      const chunks = chunkSections(sections, this.getChunkConfig(collectionId))
-      if (chunks.length === 0) throw new Error('切块结果为空')
-
-      await this.store.saveFile(sha256, ext, buffer)
-      this.store.replaceChunks(docId, chunks)
-      this.invalidateVectorCache()
-      this.store.updateDocumentStatus(docId, 'ready', {
-        pageCount: extracted.meta?.pages ?? null,
-        chunkCount: chunks.length,
-      })
-
-      return { documentId: docId, chunkCount: chunks.length, pages: extracted.meta?.pages ?? null }
+      return await this.#parseAndStore({ docId, buffer, ext, collectionId, sha256 })
     } catch (error) {
       this.store.updateDocumentStatus(docId, 'failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -752,15 +804,99 @@ this.store.deleteCollection(id)
     }
   }
 
+  /**
+   * 内部：解析内容并写入切块。
+   * 从 importFile 抽出，供「新建文档」与「失败重试」两条路径复用。
+   */
+  async #parseAndStore({ docId, buffer, ext, collectionId, sha256 = null }) {
+    const hash = sha256 ?? this.store.hashOf(buffer)
+    const extracted = await extractDocument(buffer, ext)
+
+    // 扫描件：OCR 开着就当场识别，否则标记待处理
+    if (extracted.scanned) {
+      return this.#ocrScannedDocument(docId, buffer, extracted, hash, ext)
+    }
+
+    const sections = extracted.sections.filter((s) => s.text && s.text.trim())
+    if (sections.length === 0) throw new Error('文档中没有可提取的文字')
+
+    const chunks = chunkSections(sections, this.getChunkConfig(collectionId))
+    if (chunks.length === 0) throw new Error('切块结果为空')
+
+    await this.store.saveFile(hash, ext, buffer)
+    this.store.replaceChunks(docId, chunks)
+    this.invalidateVectorCache()
+    this.store.updateDocumentStatus(docId, 'ready', {
+      pageCount: extracted.meta?.pages ?? null,
+      chunkCount: chunks.length,
+    })
+
+    return { documentId: docId, chunkCount: chunks.length, pages: extracted.meta?.pages ?? null }
+  }
+
+  /**
+   * 内部：对扫描件 PDF 按当前 OCR 配置处理。
+   * importFile、reindexDocument 与 needs-ocr 重试共用同一条路径。
+   */
+  async #ocrScannedDocument(docId, buffer, extracted, hash = null, ext = 'pdf') {
+    const fileHash = hash ?? this.store.hashOf(buffer)
+    const pageCount = extracted?.meta?.pages ?? null
+    await this.store.saveFile(fileHash, ext, buffer)
+
+    const ocrConfig = this.getOcrConfig()
+    if (ocrConfig.provider !== 'none') {
+      try {
+        this.store.updateDocumentStatus(docId, 'processing', { chunkCount: 0 })
+        const ocrText = await this.#ocrPdf(buffer, docId)
+        if (ocrText.trim() !== '') {
+          const ocrChunks = chunkSections([{ text: ocrText }])
+          if (ocrChunks.length > 0) {
+            this.store.replaceChunks(docId, ocrChunks)
+            this.invalidateVectorCache()
+            this.store.updateDocumentStatus(docId, 'ready', {
+              pageCount,
+              chunkCount: ocrChunks.length,
+              error: null,
+            })
+            return { documentId: docId, scanned: true, ocr: true, chunkCount: ocrChunks.length }
+          }
+        }
+        this.store.updateDocumentStatus(docId, 'needs-ocr', {
+          error: 'OCR 已执行但没有识别出文字，可能是空白页或图片质量太低',
+          pageCount,
+          chunkCount: 0,
+        })
+        return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
+      } catch (error) {
+        this.store.updateDocumentStatus(docId, 'needs-ocr', {
+          error: `OCR 失败：${error instanceof Error ? error.message : String(error)}`,
+          pageCount,
+          chunkCount: 0,
+        })
+        return { documentId: docId, scanned: true, ocr: false, chunkCount: 0 }
+      }
+    }
+
+    this.store.updateDocumentStatus(docId, 'needs-ocr', {
+      error: '该 PDF 没有文字层（扫描件）。到「OCR 设置」里开启识别，或在文档行点「重新解析」重试',
+      pageCount,
+      chunkCount: 0,
+    })
+    return { documentId: docId, scanned: true, chunkCount: 0 }
+  }
+
   deleteDocument(id) {
     const doc = this.store.getDocument(id)
     if (!doc) throw new Error('文档不存在')
-this.store.deleteDocument(id)
+    this.store.deleteDocument(id)
     this.invalidateVectorCache()
-    this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
+    // 只有没有其他库引用同一副本时才删物理文件
+    if (this.store.countDocumentsByHash(doc.sha256, doc.ext, doc.id) === 0) {
+      this.store.removeFile(doc.sha256, doc.ext).catch(() => {})
+    }
   }
 
-  /** 重新切块（不改原文件） */
+  /** 重新切块（不改原文件）；扫描件在 OCR 已配置时实际执行识别 */
   async reindexDocument(id) {
     const doc = this.store.getDocument(id)
     if (!doc) throw new Error('文档不存在')
@@ -772,8 +908,8 @@ this.store.deleteDocument(id)
       const extracted = await extractDocument(buffer, doc.ext)
 
       if (extracted.scanned) {
-        this.store.updateDocumentStatus(id, 'needs-ocr', { error: '扫描件需要 OCR' })
-        return { chunkCount: 0 }
+        // 与导入路径一致：OCR 开着就真正识别，没开才标记待处理
+        return await this.#ocrScannedDocument(id, buffer, extracted, doc.sha256, doc.ext)
       }
 
       const sections = extracted.sections.filter((s) => s.text && s.text.trim())
@@ -1222,6 +1358,25 @@ this.store.deleteDocument(id)
     if (target === '') throw new Error('路径不能为空')
     if (target === this.dataRoot) throw new Error('新目录与当前目录相同')
 
+    /*
+     * 嵌套防护：目标目录不能在源目录内部（反之亦然）。
+     * 不拦的话 copyDir 会把 target 一边创建一边复制进自己，
+     * 无限递归直到磁盘塞满。
+     */
+    const fromRoot = resolve(this.dataRoot)
+    const toRoot = resolve(target)
+    if (toRoot !== fromRoot) {
+      const relFromTo = relative(fromRoot, toRoot)
+      const relToFrom = relative(toRoot, fromRoot)
+      const nested = (rel) => rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+      if (nested(relFromTo)) {
+        throw new Error('新目录在当前数据目录内部，迁移会自我复制。请选一个数据目录之外的路径。')
+      }
+      if (nested(relToFrom)) {
+        throw new Error('当前数据目录在新目录内部，迁移会自我复制。请选一个不包含数据目录的路径。')
+      }
+    }
+
     const task = this.createTask(`迁移数据到 ${target}`, 3)
     try {
       this.store.setSetting('dataRoot', target)
@@ -1509,26 +1664,121 @@ this.store.deleteDocument(id)
       language: '中英混合',
     }
     if (!stored) return defaults
-    return { ...defaults, ...stored }
+    const merged = { ...defaults, ...stored }
+    // 读取时也夹紧：旧版本可能存过超限值，不能只靠写入时校验
+    return {
+      ...merged,
+      maxPages: Math.min(20, Math.max(1, Number(merged.maxPages ?? 10) || 10)),
+      scale: Math.min(3, Math.max(1, Number(merged.scale ?? 2) || 2)),
+      timeoutMs: Math.min(300000, Math.max(5000, Number(merged.timeoutMs ?? 90000) || 90000)),
+    }
   }
 
-  /** 保存 OCR 配置 */
+  /** 保存 OCR 配置；Key 单独走凭据通道，不进 settings；数值一律夹紧 */
   setOcrConfig(patch) {
     patch = sanitizeConfig(patch ?? {}) ?? {}
     const current = this.getOcrConfig()
-    // apiKey 单独处理，不进 settings
-    const { apiKey, ...rest } = patch ?? {}
-    const next = { ...current, ...rest }
+    // apiKey 已在路由层单独处理，这里若混进来也直接丢弃
+    const { apiKey: _discarded, ...rest } = patch ?? {}
+    const merged = { ...current, ...rest }
+
+    /*
+     * 写入时夹紧数值，与 resolveOcrConfig 一致。
+     * 否则旧配置里 maxPages=999 之类的值会绕过 20 页上限，
+     * 一次性烧掉大量 OCR 额度。
+     */
+    const next = {
+      ...merged,
+      maxPages: Math.min(20, Math.max(1, Number(merged.maxPages ?? 10) || 10)),
+      scale: Math.min(3, Math.max(1, Number(merged.scale ?? 2) || 2)),
+      timeoutMs: Math.min(300000, Math.max(5000, Number(merged.timeoutMs ?? 90000) || 90000)),
+    }
+
     this.store.setSetting('ocr', next)
-    if (typeof apiKey === 'string') this.store.setSetting('ocrKey', apiKey)
     this.ocrCache = null
     return next
   }
 
+  /**
+   * 读取 OCR Key：优先 DSH 凭据库 / secrets.json（与嵌入 Key 同一通道），
+   * 兼容旧版本存在 settings 表 ocrKey 里的值——读到即迁移，读完删除。
+   */
+  async #loadOcrKey() {
+    const key = credentialKey('dsh-knowbase', 'ocr-api')
+    // 1. 凭据库
+    try {
+      const credentials = this.ctx?.get?.('credentials')
+      if (credentials?.readRecord) {
+        const record = await credentials.readRecord(key)
+        const value = record?.key ?? record?.value ?? record?.secret
+        if (typeof value === 'string' && value !== '') return value
+      }
+    } catch {
+      // 凭据服务不可用时回落到本地文件
+    }
+    // 2. 本地 secrets.json（与嵌入 Key 共用文件，字段分开）
+    try {
+      const raw = await readFile(this.ocrSecretPath(), 'utf8')
+      const parsed = JSON.parse(raw)
+      if (typeof parsed?.apiKey === 'string' && parsed.apiKey !== '') return parsed.apiKey
+    } catch {
+      // 文件不存在：继续
+    }
+    // 3. 旧版迁移：settings 表里的 ocrKey（明文），读到就搬走并删除
+    try {
+      const legacy = this.store.getSetting('ocrKey', '')
+      if (typeof legacy === 'string' && legacy.trim() !== '') {
+        await this.saveOcrKey(legacy.trim())
+        this.store.deleteSetting('ocrKey')
+        return legacy.trim()
+      }
+    } catch {
+      // 迁移失败不影响读取
+    }
+    return ''
+  }
+
+  /** OCR Key 的独立 secret 文件（不与嵌入 Key 混放） */
+  ocrSecretPath() {
+    return join(this.dataRoot, 'ocr-secrets.json')
+  }
+
+  /** 内部：把 OCR Key 写进凭据库或文件，不碰 settings */
+  async saveOcrKey(apiKey) {
+    const trimmed = String(apiKey ?? '').trim()
+    const key = credentialKey('dsh-knowbase', 'ocr-api')
+    try {
+      const credentials = this.ctx?.get?.('credentials')
+      if (credentials?.modifyRecord) {
+        if (trimmed) {
+          await credentials.modifyRecord(key, async () => ({ kind: 'api-key', key: trimmed }))
+        } else if (credentials.deleteRecord) {
+          await credentials.deleteRecord(key)
+        } else {
+          await credentials.modifyRecord(key, async () => ({ kind: 'api-key' }))
+        }
+        this.ocrKeyCache = trimmed
+        return 'credentials'
+      }
+    } catch {
+      // 落到本地文件
+    }
+    if (trimmed === '') {
+      await unlink(this.ocrSecretPath()).catch(() => {})
+    } else {
+      await writeFile(this.ocrSecretPath(), JSON.stringify({ apiKey: trimmed }), { mode: 0o600 })
+    }
+    this.ocrKeyCache = trimmed
+    return 'file'
+  }
+
   /** 当前是否已存 OCR Key（不返回明文） */
-  hasOcrKey() {
-    const key = this.store.getSetting('ocrKey', '')
-    return typeof key === 'string' && key.trim() !== ''
+  async hasOcrKey() {
+    if (this.ocrKeyCache === null) {
+      this.ocrKeyCache = await this.#loadOcrKey()
+    }
+    const value = this.ocrKeyCache
+    return typeof value === 'string' && value.trim() !== ''
   }
 
   /** 造一个 OCR 实例 */
@@ -1536,7 +1786,9 @@ this.store.deleteDocument(id)
     const config = this.getOcrConfig()
     if (config.provider === 'none') return null
 
-    const cacheKey = `ocr|${JSON.stringify(config)}|${this.store.getSetting('ocrKey', '')}`
+    const ocrKey = this.ocrKeyCache ?? await this.#loadOcrKey()
+
+    const cacheKey = `ocr|${JSON.stringify(config)}|${ocrKey}`
     if (this.ocrCache?.key === cacheKey) return this.ocrCache.engine
 
     // 本地识别：完全离线，不需要 Key
@@ -1553,7 +1805,7 @@ this.store.deleteDocument(id)
     const { VisionOcr } = await import('./lib/ocr.js')
     const engine = new VisionOcr({
       ...config,
-      apiKey: this.store.getSetting('ocrKey', ''),
+      apiKey: ocrKey,
     })
     this.ocrCache = { key: cacheKey, engine }
     return engine
@@ -1698,7 +1950,6 @@ this.store.deleteDocument(id)
     if (signal?.aborted) return null
 
     const collections = []
-    const results = []
     const failures = []
 
     for (const name of names) {
@@ -1708,30 +1959,19 @@ this.store.deleteDocument(id)
         continue
       }
       collections.push({ name: collection.name })
-
-      try {
-        const found = await this.semanticSearch(question === '' ? collection.name : question, {
-          collectionId: collection.id,
-        })
-        results.push({
-          collection: collection.name,
-          hits: found.hits ?? [],
-          note: found.note ?? (found.mode === 'keyword' ? '当前仅用关键词检索' : undefined),
-        })
-      } catch (error) {
-        failures.push(`「${collection.name}」检索失败：${error instanceof Error ? error.message : String(error)}`)
-      }
     }
 
     if (collections.length === 0 && failures.length === 0) return null
 
     /*
-     * 不再把资料铺进对话。
+     * 不再把资料铺进对话，也不在这里预先检索。
      *
-     * 之前把检索结果整段注入上下文，结果对话里出现一张巨大的
-     * 「【知识库资料】…」卡片，淹没正文、也无法折叠。
+     * 旧实现在这里对每个选中库跑一遍完整 semanticSearch（含嵌入
+     * API 调用），结果随即丢弃——每次提问都白花钱、白等延迟，
+     * 回合尾卡片还因为固定写入空命中而永远显示「没有检索到」。
      *
-     * 现在只给一句指令，让模型自己调用 kb_search——
+     * 现在只记录范围；真正的检索由模型按上下文指令调用 kb_search
+     * 完成，kb_search 执行时把真实命中回填到回合摘要里。
      * 工具调用会在对话里渲染成可折叠的「输入 / 输出」卡片，
      * 资料落在「输出」里，过程留在思考流里，正文保持干净。
      */
@@ -1743,6 +1983,9 @@ this.store.deleteDocument(id)
      * 指令改为走 systemPrompt.context()——那条通道在对话里
      * 只显示为「上下文注入 · dsh-knowbase」一行（折叠在过程里），
      * 不占正文，也不会被误认为是用户说的话。
+     *
+     * hits 先留空；kb_search 在本轮被调用时会把真实命中合并进来
+     * （见 mergeTurnRecallHits），卡片据此显示实际取到的资料。
      */
     this.rememberTurnRecall(sessionId, turn, scopeNames, [])
 
@@ -1751,6 +1994,18 @@ this.store.deleteDocument(id)
      * 调用方拿到 null 就原样放行，用户看到的就是自己打的原话。
      */
     return { messages: list, names: scopeNames }
+  }
+
+  /**
+   * kb_search 执行后回填本轮摘要的真实命中。
+   * pre-step 只建了空壳，这里把工具实际取到的结果合并进去，
+   * 让回合尾卡片显示「这轮真的用到了哪些资料」。
+   */
+  mergeTurnRecallHits(sessionId, turn, names, results) {
+    const existing = this.getTurnRecall(sessionId, turn)
+    if (existing === null) return null
+    this.rememberTurnRecall(sessionId, turn, names, results)
+    return this.getTurnRecall(sessionId, turn)
   }
 
   /* ────────────────────── 回合检索摘要 ────────────────────── */
@@ -1845,8 +2100,12 @@ this.store.deleteDocument(id)
         .filter((n) => n !== ''),
     )]
 
-    if (clean.length === 0) this.composerScopes.delete(id)
-    else this.composerScopes.set(id, { names: clean, at: Date.now() })
+    if (clean.length === 0) {
+      this.composerScopes.delete(id)
+      this.currentTurnBySession?.delete(id)
+    } else {
+      this.composerScopes.set(id, { names: clean, at: Date.now() })
+    }
 
     return { sessionId: id, names: clean }
   }
@@ -1865,7 +2124,10 @@ this.store.deleteDocument(id)
   pruneComposerScopes(maxAgeMs = 12 * 60 * 60 * 1000) {
     const now = Date.now()
     for (const [id, value] of this.composerScopes) {
-      if (now - value.at > maxAgeMs) this.composerScopes.delete(id)
+      if (now - value.at > maxAgeMs) {
+        this.composerScopes.delete(id)
+        this.currentTurnBySession?.delete(id)
+      }
     }
 
     // 检索摘要也一起清理，避免长时间挂机后内存只增不减
@@ -2376,7 +2638,7 @@ export function apply(ctx, config) {
 
   ctx.effect(() => {
     kb.start()
-    return () => kb.stop()
+    return () => { kb.stop().catch(() => {}) }
   }, 'dsh-knowbase: lifecycle')
 
   /* ── 对话内选库：只记录本轮信息，不改动任何消息 ── */
@@ -2388,11 +2650,26 @@ export function apply(ctx, config) {
       // 顺手清理过期会话选择，避免长期运行后 Map 变大
       kb.pruneComposerScopes()
       const sessionId = payload?.agent?.id
+      /*
+       * 把本轮 turn 记到会话上，kb_search 执行时据此回填摘要命中。
+       * 没有选中任何库的轮次不记录，避免无谓的 Map 项。
+       */
+      const turn = payload?.turn
+      const pickedNames = sessionId === undefined
+        ? []
+        : (kb.composerScopes.get(String(sessionId))?.names ?? [])
+      if (sessionId !== undefined && Number.isFinite(Number(turn)) && pickedNames.length > 0) {
+        kb.currentTurnBySession = kb.currentTurnBySession ?? new Map()
+        kb.currentTurnBySession.set(String(sessionId), Number(turn))
+      } else if (sessionId !== undefined && kb.currentTurnBySession) {
+        // 本轮没选库：清掉上一轮的记录，避免 kb_search 回填到旧回合
+        kb.currentTurnBySession.delete(String(sessionId))
+      }
       await kb.buildComposerInjection(
         decision.messages,
         payload?.signal,
         sessionId,
-        payload?.turn,
+        turn,
       )
     } catch {
       // 记录失败不影响提问
@@ -2616,11 +2893,28 @@ export function apply(ctx, config) {
       return fail('dsh-knowbase/bad-action', '未知操作')
     })
 
-    /* ── 建立向量索引 ── */
+    /* ── 建立向量索引（长任务：可取消、防重复触发）── */
     route('/api/dsh-knowbase/embed/build', async (body) => {
+      if (kb.embedBuildTask && kb.embedBuildTask.state === 'running') {
+        return json({ ok: true, value: { started: false, reason: '已经在建索引了', taskId: kb.embedBuildTask.id } })
+      }
+
+      const task = kb.createTask('建立向量索引', 0)
+      kb.embedBuildTask = task
       const collectionId = body.collectionId ? Number(body.collectionId) : null
-      const result = await kb.embedCollection({ collectionId })
-      return json({ ok: true, value: result })
+      try {
+        const result = await kb.embedCollection({
+          collectionId,
+          signal: task.controller.signal,
+          onProgress: (done, total) => kb.touchTask(task, { done, total }),
+        })
+        kb.settleTask(task, 'done')
+        return json({ ok: true, value: { ...result, started: true, taskId: task.id } })
+      } catch (error) {
+        const aborted = error instanceof Error && /取消|abort/i.test(error.message ?? '')
+        kb.settleTask(task, aborted ? 'cancelled' : 'failed', error)
+        throw error
+      }
     })
 
     route('/api/dsh-knowbase/embed/status', (body) =>
@@ -2833,12 +3127,16 @@ export function apply(ctx, config) {
       if (body.action === 'get') {
         return json({
           ok: true,
-          value: { ...kb.getOcrConfig(), hasKey: kb.hasOcrKey() },
+          value: { ...kb.getOcrConfig(), hasKey: await kb.hasOcrKey() },
         })
       }
       if (body.action === 'set') {
+        // Key 单独走凭据通道；config 里混进来的 apiKey 也一并走凭据
+        if (body.config && typeof body.config.apiKey === 'string') {
+          await kb.saveOcrKey(body.config.apiKey)
+        }
         const value = kb.setOcrConfig(body.config ?? {})
-        return json({ ok: true, value: { ...value, hasKey: kb.hasOcrKey() } })
+        return json({ ok: true, value: { ...value, hasKey: await kb.hasOcrKey() } })
       }
       if (body.action === 'test') {
         return json({ ok: true, value: await kb.testOcr(body.config) })
@@ -2962,12 +3260,27 @@ export function apply(ctx, config) {
     route('/api/dsh-knowbase/upload', async (body) => {
       const { files, collectionId } = body
       if (!Array.isArray(files) || files.length === 0) return fail('dsh-knowbase/no-file', '没有收到文件')
+      if (files.length > MAX_INGEST_FILES) {
+        return fail('dsh-knowbase/too-many-files', `一次最多上传 ${MAX_INGEST_FILES} 个文件，这次有 ${files.length} 个`)
+      }
+
+      /*
+       * 前置体积闸（防内存放大）：
+       * base64 解码前先看编码长度——base64 体积约为原文件 4/3，
+       * 原来的检查在解码后才发生，峰值内存约为原文件的 2.3 倍。
+       * 解码前拒掉超限项，避免整个请求把进程内存打高。
+       */
+      const MAX_B64_CHARS = Math.ceil(MAX_FILE_BYTES * 4 / 3) + 8 // 少量余量给换行与 padding
 
       const results = []
       for (const file of files) {
         const name = String(file?.name ?? '未命名')
         try {
-          const buffer = Buffer.from(String(file?.data ?? ''), 'base64')
+          const encoded = String(file?.data ?? '')
+          if (encoded.length > MAX_B64_CHARS) {
+            throw new Error(`文件过大（编码后 ${Math.round(encoded.length / 1024 / 1024)}MB），上限 ${MAX_FILE_BYTES / 1024 / 1024}MB`)
+          }
+          const buffer = Buffer.from(encoded, 'base64')
           if (buffer.length === 0) throw new Error('文件内容为空')
           const outcome = await kb.importFile({
             name,

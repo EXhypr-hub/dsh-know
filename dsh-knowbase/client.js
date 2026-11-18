@@ -2477,7 +2477,20 @@ window.__ModuleLoader__.load({
 
           setUploads((prev) => prev.map((u) => (entries.some((e) => e.key === u.key) ? { ...u, state: 'importing' } : u)))
 
-          const results = await api('upload', { files: payload, collectionId: activeId })
+          /*
+           * 分批上传：服务端单次上限 200 个文件。
+           * 整目录拖入时可能远超这个数，按 50 个一批发送并保序合并结果，
+           * 避免整批被拒。
+           */
+          const CHUNK = 50
+          const results = []
+          for (let i = 0; i < payload.length; i += CHUNK) {
+            const part = await api('upload', {
+              files: payload.slice(i, i + CHUNK),
+              collectionId: activeId,
+            })
+            results.push(...part)
+          }
 
           setUploads((prev) => prev.map((u) => {
             const index = entries.findIndex((e) => e.key === u.key)

@@ -66,6 +66,8 @@ export class ApiEmbedder {
     this.dimension = config.dimension ?? 0
     this.batchSize = Math.max(1, Math.min(config.batchSize ?? 16, 64))
     this.timeoutMs = config.timeoutMs ?? 30000
+    // 重试次数：仅对网络错误与 5xx/429 生效，指数退避
+    this.retries = Math.max(0, Math.min(Number(config.retries ?? 2), 5))
     this.dimensionResolved = this.dimension
   }
 
@@ -77,7 +79,7 @@ export class ApiEmbedder {
     return `${this.model}（API）`
   }
 
-  /** 发一次请求，返回向量数组 */
+  /** 发一次请求，返回向量数组；网络错误与 5xx/429 按指数退避重试 */
   async embedBatch(texts) {
     if (!this.baseUrl) throw new Error('尚未配置嵌入服务地址')
     if (!this.model) throw new Error('尚未配置嵌入模型名')
@@ -85,39 +87,64 @@ export class ApiEmbedder {
     const url = `${this.baseUrl}/embeddings`
     const headers = { 'content-type': 'application/json' }
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`
+    const body = JSON.stringify({ model: this.model, input: texts })
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ model: this.model, input: texts }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    let lastError = null
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      if (attempt > 0) {
+        // 指数退避：1s / 2s / 4s …，上限 8s
+        await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** (attempt - 1), 8000)))
+      }
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        })
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '')
-      const hint = res.status === 401 ? 'API Key 无效或未配置'
-        : res.status === 404 ? '地址或模型名不正确'
-        : res.status === 429 ? '请求过于频繁，请稍后重试'
-        : `服务返回 ${res.status}`
-      throw new Error(`${hint}${detail ? `：${detail.slice(0, 200)}` : ''}`)
+        // 可重试的状态：限流与网关/服务端临时故障
+        if ((res.status === 429 || res.status >= 500) && attempt < this.retries) {
+          lastError = new Error(`服务返回 ${res.status}`)
+          continue
+        }
+
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '')
+          const hint = res.status === 401 ? 'API Key 无效或未配置'
+            : res.status === 404 ? '地址或模型名不正确'
+            : res.status === 429 ? '请求过于频繁，请稍后重试'
+            : `服务返回 ${res.status}`
+          throw new Error(`${hint}${detail ? `：${detail.slice(0, 200)}` : ''}`)
+        }
+
+        const data = await res.json()
+        const items = data?.data
+        if (!Array.isArray(items) || items.length !== texts.length) {
+          throw new Error('服务返回的数据格式不符合预期')
+        }
+
+        // 按 index 排序，防止服务端乱序
+        const sorted = [...items].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+        const vectors = sorted.map((item) => {
+          const emb = item.embedding
+          if (!Array.isArray(emb) || emb.length === 0) throw new Error('返回了空向量')
+          return emb
+        })
+
+        if (this.dimensionResolved === 0) this.dimensionResolved = vectors[0].length
+        return vectors
+      } catch (error) {
+        // 网络层错误（超时、断连）可重试；业务错误（Key、格式）不重试
+        const isNetworkError = !(error instanceof Error) || /fetch failed|abort|timeout|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error.message ?? '')
+        if (isNetworkError && attempt < this.retries) {
+          lastError = error
+          continue
+        }
+        throw error
+      }
     }
-
-    const data = await res.json()
-    const items = data?.data
-    if (!Array.isArray(items) || items.length !== texts.length) {
-      throw new Error('服务返回的数据格式不符合预期')
-    }
-
-    // 按 index 排序，防止服务端乱序
-    const sorted = [...items].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-    const vectors = sorted.map((item) => {
-      const emb = item.embedding
-      if (!Array.isArray(emb) || emb.length === 0) throw new Error('返回了空向量')
-      return emb
-    })
-
-    if (this.dimensionResolved === 0) this.dimensionResolved = vectors[0].length
-    return vectors
+    throw lastError ?? new Error('嵌入请求失败')
   }
 
   /** 批量嵌入，自动分批 */

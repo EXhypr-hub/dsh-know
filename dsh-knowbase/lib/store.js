@@ -270,6 +270,24 @@ export class KnowledgeStore {
     return this.db.prepare('SELECT * FROM documents WHERE collection_id = ? AND sha256 = ?').get(collectionId, sha256)
   }
 
+  /**
+   * 统计仍引用同一文件副本的文档数（跨库共享判断）。
+   * 文件副本按 sha256+ext 全局共享，删除前必须确认没有其他文档在用。
+   */
+  countDocumentsByHash(sha256, ext, excludeId = null) {
+    const normalized = String(ext ?? '').replace(/^\./, '')
+    if (excludeId === null) {
+      const row = this.db.prepare(
+        "SELECT COUNT(*) AS n FROM documents WHERE sha256 = ? AND REPLACE(ext, '.', '') = ?",
+      ).get(sha256, normalized)
+      return row?.n ?? 0
+    }
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM documents WHERE sha256 = ? AND REPLACE(ext, '.', '') = ? AND id != ?",
+    ).get(sha256, normalized, excludeId)
+    return row?.n ?? 0
+  }
+
   createDocument({ collectionId, title, filename, ext, size, sha256 }) {
     const now = Date.now()
     const info = this.db.prepare(`

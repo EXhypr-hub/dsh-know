@@ -94,6 +94,9 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
     await mkdir(dirname(dest), { recursive: true })
 
     let ok = false
+    // 记录本文件实际通过的校验方式；声明必须放在镜像循环外，
+    // 否则循环结束后引用会抛 ReferenceError（首个文件下载成功即崩）
+    let integrity = 'size-only'
     const errors = []
     for (const mirror of MIRRORS) {
       if (signal?.aborted) throw new Error('已取消下载')
@@ -124,7 +127,6 @@ export async function downloadModel({ modelId, modelsDir, onProgress, signal }) 
           .replace(/"/g, '')
           .trim()
           .toLowerCase()
-        let integrity = 'size-only'
         if (/^[a-f0-9]{64}$/.test(declared)) {
           const actual = await sha256Of(buffer)
           if (actual !== declared) {

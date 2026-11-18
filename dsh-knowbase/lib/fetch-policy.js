@@ -8,6 +8,9 @@
  *   - 想要的更严的话，可以额外填白名单（可选）
  */
 
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+
 /** 同站点两次请求的最小间隔（毫秒） */
 export const MIN_INTERVAL_MS = 2000
 
@@ -106,6 +109,45 @@ export function isPrivateHost(hostname) {
   return false
 }
 
+/**
+ * DNS 层面的内网校验。
+ *
+ * 只看主机名字符串不够：攻击者可以注册一个公网域名，
+ * 把 A/AAAA 记录指向 127.0.0.1（DNS rebinding）。
+ * 发起请求前先把域名解析出来，所有 IP 都必须通过 isPrivateHost。
+ *
+ * @param {string} hostname
+ * @returns {Promise<{ ok: true, addresses: string[] } | { ok: false, reason: string }>}
+ */
+export async function resolvePublicHost(hostname) {
+  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '')
+  // 已经是 IP 字面量：无需解析，直接复用字符串规则
+  if (isIP(host) !== 0) {
+    return isPrivateHost(host)
+      ? { ok: false, reason: `内网地址：${host}` }
+      : { ok: true, addresses: [host] }
+  }
+  if (isPrivateHost(host)) return { ok: false, reason: `内网地址：${host}` }
+
+  let addresses
+  try {
+    const records = await lookup(host, { all: true, verbatim: true })
+    addresses = records.map((r) => r.address)
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `域名解析失败：${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+
+  if (addresses.length === 0) return { ok: false, reason: '域名没有解析到任何地址' }
+  const blocked = addresses.filter((ip) => isPrivateHost(ip))
+  if (blocked.length > 0) {
+    return { ok: false, reason: `域名解析到了内网地址（${blocked.join(', ')}），已拒绝` }
+  }
+  return { ok: true, addresses }
+}
+
 /** 同站点限速：等到距上次请求满 MIN_INTERVAL_MS */
 export async function waitForSlot(host) {
   const key = String(host ?? '').toLowerCase()
@@ -191,7 +233,17 @@ export async function checkRobots(targetUrl, { timeoutMs = 8000 } = {}) {
     const res = await fetch(`${origin}/robots.txt`, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: { 'user-agent': 'dsh-knowbase/0.3 (+local knowledge base)' },
+      /*
+       * 不跟随重定向：robots.txt 的抓取发生在内网校验之后，
+       * 若站点把 robots 重定向到别处（含内网地址），跟随就会形成 SSRF。
+       * 遇到 3xx 按「没有规则」处理，不追。
+       */
+      redirect: 'manual',
     })
+    if (res.status >= 300 && res.status < 400) {
+      robotsCache.set(origin, { at: now, rules: [] })
+      return { allowed: true }
+    }
     if (!res.ok) {
       robotsCache.set(origin, { at: now, rules: [] })
       return { allowed: true }

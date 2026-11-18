@@ -14,6 +14,7 @@ import { KnowledgeStore, titleFromFilename } from '../lib/store.js'
 
 let pass = 0
 let fail = 0
+let skipped = 0
 
 function ok(name, detail = '') {
   pass++
@@ -23,6 +24,12 @@ function ok(name, detail = '') {
 function bad(name, error) {
   fail++
   console.log(`  ❌ ${name} — ${error instanceof Error ? error.message : error}`)
+}
+
+/** 跳过不等于通过：单独计数，避免缺样例时把「没测」当「测过了」 */
+function skip(name, reason = '') {
+  skipped++
+  console.log(`  ⏭️  ${name} — 跳过${reason ? `（${reason}）` : ''}`)
 }
 
 async function test(name, fn) {
@@ -169,7 +176,7 @@ await test('真实 DOCX 抽取', async () => {
   try {
     buffer = readFileSync(SAMPLE_DOCX)
   } catch {
-    ok('真实 DOCX 抽取', '跳过（样例文件不存在）')
+    skip('真实 DOCX 抽取', '样例文件不存在')
     return
   }
   const result = await extractDocument(buffer, 'docx')
@@ -981,7 +988,7 @@ await test('PDF 页面渲染', async () => {
 
   const candidate = 'C:/Users/34096/Desktop/111/生涯发展报告-游戏开发工程师.pdf'
   if (!existsSync(candidate)) {
-    ok('PDF 页面渲染', '（跳过：测试 PDF 不存在）')
+    skip('PDF 页面渲染', '测试 PDF 不存在')
     return
   }
 
@@ -1041,7 +1048,7 @@ await test('本地 OCR', async () => {
   const modelsDir = 'C:/Users/34096/.dsh/knowbase/models'
   const status = await listLangs(modelsDir)
   if (!status.find((l) => l.lang === 'chi_sim')?.downloaded) {
-    ok('本地 OCR', '（跳过识别：中文语言包未下载）')
+    skip('本地 OCR', '中文语言包未下载')
     return
   }
 
@@ -1705,12 +1712,21 @@ await test('按钮 ↔ 后端 全量对照', async () => {
     try {
       return { ok: true, out: execFileSync(process.execPath, [path], { encoding: 'utf8', cwd }) }
     } catch (error) {
+      // 受限沙箱（如 Windows 应用沙箱）禁止 node 再派生 node 子进程：
+      // 这是环境限制，不是代码失败，明确跳过而不是判失败
+      if (error?.code === 'EPERM' || error?.code === 'EACCES' || error?.code === 'ENOENT') {
+        return { ok: false, blocked: true, out: String(error.message ?? '') }
+      }
       return { ok: false, out: String(error.stdout ?? error.message) }
     }
   }
 
   // 1. 前端每一处 api() 调用，后端都要有对应路由与动作
   const routes = run('check-routes.mjs')
+  if (routes.blocked) {
+    skip('按钮 ↔ 后端 全量对照', '当前环境禁止派生子进程（EPERM），请手动运行 check-routes / check-buttons')
+    return
+  }
   if (!routes.ok || !/✅ 全部 \d+ 组/.test(routes.out)) {
     const detail = routes.out.split('\n').filter((l) => /❌|\[/.test(l)).slice(0, 5).join('\n')
     throw new Error(`路由对不上：\n${detail || routes.out.slice(0, 200)}`)
@@ -2096,10 +2112,194 @@ await test('指令走上下文注入，对话里不留消息', async () => {
   ok('指令走上下文注入，对话里不留消息', 'pre-step 原样放行，指令折叠显示，工具自动落到选中的库')
 })
 
+/* ───────────────── 0.6.8 修复的真实执行回归 ───────────────── */
+
+await test('安全：模型下载执行路径', async () => {
+  const { downloadModel } = await import('../lib/models.js')
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'kb-dl-'))
+  const original = globalThis.fetch
+  // 用本地假服务替代镜像，真正执行 downloadModel：
+  // 旧实现会在循环外引用 integrity 变量，这里会抛 ReferenceError
+  globalThis.fetch = async (url) => {
+    const name = String(url).split('/').pop()
+    return new Response(Buffer.from(`content:${name}`), {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    })
+  }
+  try {
+    const result = await downloadModel({ modelId: 'bge-small-zh', modelsDir: dir })
+    if (result.integrity !== 'size-only') throw new Error(`无校验头时 integrity 应为 size-only，实际 ${result.integrity}`)
+    if (result.verified !== 0) throw new Error('没有校验头时 verified 应为 0')
+    for (const file of result.files) {
+      const body = await readFile(join(dir, 'bge-small-zh', file), 'utf8')
+      if (!body.startsWith('content:')) throw new Error(`文件 ${file} 内容不对`)
+    }
+    ok('安全：模型下载执行路径', `${result.files.length} 个文件全部落盘，未抛作用域错误`)
+  } finally {
+    globalThis.fetch = original
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+await test('安全：跨库共享文件删除', async () => {
+  const { KnowledgeBase } = await import('../index.js')
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'kb-share-'))
+  const kb = new KnowledgeBase({ get: () => undefined }, { dataRoot: dir })
+  await kb.start()
+  if (!kb.ready) throw new Error(`知识库未就绪：${kb.readyError}`)
+  try {
+    const c1 = kb.createCollection('共享库一')
+    const c2 = kb.createCollection('共享库二')
+    const buffer = Buffer.from('# 共享文件\n\n同一份内容导入两个库。', 'utf8')
+    const a = await kb.importFile({ name: '共享.md', buffer, collectionId: c1.id })
+    const b = await kb.importFile({ name: '共享.md', buffer, collectionId: c2.id })
+    if (a.documentId === b.documentId) throw new Error('两个库应是独立文档记录')
+
+    const doc = kb.store.getDocument(b.documentId)
+    kb.deleteDocument(a.documentId)
+
+    const stillThere = await kb.store.readFile(doc.sha256, doc.ext).then(() => true).catch(() => false)
+    if (!stillThere) throw new Error('删掉库一的文档后，库二共享的原文件被误删')
+
+    const reindex = await kb.reindexDocument(b.documentId)
+    if (!reindex.chunkCount) throw new Error('库二重新解析没有切块')
+
+    kb.deleteDocument(b.documentId)
+    await new Promise((r) => setTimeout(r, 50))
+    const gone = await kb.store.readFile(doc.sha256, doc.ext).then(() => false).catch(() => true)
+    if (!gone) throw new Error('最后一个引用删除后副本应被清理')
+    ok('安全：跨库共享文件删除', '引用计数生效，删一库不影响另一库')
+  } finally {
+    await kb.stop()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+await test('安全：OCR Key 不落 settings', async () => {
+  const { KnowledgeBase } = await import('../index.js')
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'kb-ocrkey-'))
+  const kb = new KnowledgeBase({ get: () => undefined }, { dataRoot: dir })
+  await kb.start()
+  try {
+    // 模拟旧版本遗留：Key 明文躺在 settings 表里
+    kb.store.setSetting('ocrKey', 'legacy-secret')
+    kb.ocrKeyCache = null
+    if (!(await kb.hasOcrKey())) throw new Error('旧版 settings 里的 Key 未读到')
+    if (kb.store.getSetting('ocrKey', null) !== null) throw new Error('旧 Key 应迁移后从 settings 删除')
+
+    await kb.saveOcrKey('sk-new-secret')
+    if (kb.store.getSetting('ocrKey', null) !== null) throw new Error('新 Key 不应写入 settings')
+
+    const raw = await readFile(join(dir, 'ocr-secrets.json'), 'utf8')
+    if (!raw.includes('sk-new-secret')) throw new Error('Key 未落到独立的 secrets 文件')
+    if (raw.includes('legacy-secret')) throw new Error('旧 Key 仍残留在文件里')
+    ok('安全：OCR Key 不落 settings', '旧数据自动迁移，新 Key 走凭据通道')
+  } finally {
+    await kb.stop()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+await test('导入重试：失败文档不再被重复检测短路', async () => {
+  const { KnowledgeBase } = await import('../index.js')
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'kb-retry-'))
+  const kb = new KnowledgeBase({ get: () => undefined }, { dataRoot: dir })
+  await kb.start()
+  try {
+    const collection = kb.createCollection('重试库')
+    const broken = Buffer.from('not a real zip', 'utf8')
+
+    let firstFailed = false
+    try {
+      await kb.importFile({ name: '坏文档.docx', buffer: broken, collectionId: collection.id })
+    } catch {
+      firstFailed = true
+    }
+    if (!firstFailed) throw new Error('损坏的 docx 应当失败')
+
+    const [doc] = kb.listDocuments(collection.id)
+    if (doc.status !== 'failed') throw new Error(`失败后状态应为 failed，实际 ${doc.status}`)
+
+    // 再次导入同一文件：应当重新尝试（并再次失败），而不是返回 duplicate 短路
+    let secondFailed = false
+    try {
+      await kb.importFile({ name: '坏文档.docx', buffer: broken, collectionId: collection.id })
+    } catch {
+      secondFailed = true
+    }
+    if (!secondFailed) throw new Error('第二次导入被重复检测短路了，没有真正重试')
+    ok('导入重试：失败文档不再被重复检测短路', 'failed 文档可重试')
+  } finally {
+    await kb.stop()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+await test('多选库检索不触及未选库', async () => {
+  const { registerTools } = await import('../lib/tools.js')
+  const defs = {}
+  const ctx = { tools: { register: (definition) => { defs[definition.name] = definition } } }
+  const collections = {
+    'A库': { id: 1, name: 'A库' },
+    'B库': { id: 2, name: 'B库' },
+    'C库': { id: 3, name: 'C库' },
+  }
+  const hitsById = {
+    1: [{ id: 11, title: 'A', text: 'aaa', similarity: 0.9 }],
+    2: [{ id: 22, title: 'B', text: 'bbb', similarity: 0.8 }],
+    3: [{ id: 33, title: 'C', text: 'ccc', similarity: 0.99 }],
+  }
+  const kb = {
+    composerScopes: new Map([['s1', { names: ['A库', 'B库'] }]]),
+    resolveCollection: (name) => collections[name] ?? null,
+    semanticSearch: async (query, { collectionId }) => ({ hits: hitsById[collectionId] ?? [], mode: 'hybrid' }),
+    currentTurnBySession: undefined,
+    mergeTurnRecallHits: () => null,
+  }
+  registerTools(ctx, kb)
+  const outcome = await defs.kb_search.execute({ query: '问题' }, { agent: { id: 's1' } })
+  if (outcome.mode !== 'hybrid-multi') throw new Error(`多选模式不对：${outcome.mode}`)
+  if (outcome.count !== 2) throw new Error(`应只返回选中两库的 2 条，实际 ${outcome.count}`)
+  if (outcome.hits.some((hit) => hit.collection === 'C库')) throw new Error('带入了用户未选中的库')
+  ok('多选库检索不触及未选库', '逐库检索并合并，C库未被读取')
+})
+
+await test('安全：重定向到内网地址被拒绝', async () => {
+  const { KnowledgeBase } = await import('../index.js')
+  const { mkdtemp } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'kb-redir-'))
+  const kb = new KnowledgeBase({ get: () => undefined }, { dataRoot: dir })
+  kb.getFetchConfig = () => ({ enabled: true, whitelist: [], minIntervalMs: 0, maxBytes: 1024 * 1024 })
+  const original = globalThis.fetch
+  // 公网 IP 字面量（免 DNS）→ 302 指向 127.0.0.1，必须被逐跳校验拦下
+  globalThis.fetch = async () => new Response(null, {
+    status: 302,
+    headers: { location: 'http://127.0.0.1:9/secret' },
+  })
+  try {
+    let message = ''
+    try {
+      await kb.fetchSource({ url: 'http://93.184.216.34/start', collectionId: 1 })
+    } catch (error) {
+      message = error.message
+    }
+    if (!/内网/.test(message)) throw new Error(`重定向到内网应被拒绝，实际：${message || '没有报错'}`)
+    ok('安全：重定向到内网地址被拒绝', '每一跳都重新校验')
+  } finally {
+    globalThis.fetch = original
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })
 
-console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══\n`)
+console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 / ${skipped} 跳过 ═══\n`)
 // 不直接 process.exit：让事件循环自然排空，避免 HTTP server 句柄未关闭时的 libuv 断言
 if (fail > 0) process.exitCode = 1
