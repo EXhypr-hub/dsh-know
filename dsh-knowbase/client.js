@@ -2121,6 +2121,24 @@ window.__ModuleLoader__.load({
      * 状态放在模块级，命令（打开/关闭）与选择条组件（渲染）都能读，
      * 互不依赖父子关系。改动后同步给 Host，供提问前自动检索。
      */
+    /**
+     * 从 slot props 或 session 对象里取会话标识。
+     *
+     * 取不到时返回 null——**绝不再回落到 'current'**。
+     *
+     * 之前两处（选择条、斜杠菜单）都回落成 'current'：
+     * 真实会话与 'current' 是两个独立的存储键，谁打开过就存在谁名下，
+     * 于是组件某一拍拿到 undefined 时读的是另一份状态，
+     * 表现就是选择框「时不时自己冒出来」。
+     */
+    function readSessionId(source) {
+      if (source === null || source === undefined) return null
+      const raw = source.sessionId ?? source.session?.sessionId ?? source.session?.id ?? source.id
+      if (raw === undefined || raw === null) return null
+      const id = String(raw).trim()
+      return id === '' ? null : id
+    }
+
     const KB_SCOPE_STORE = {
       /** sessionId -> Set<库名> */
       selected: new Map(),
@@ -6045,9 +6063,7 @@ window.__ModuleLoader__.load({
      */
     function KbScopeBar(props) {
       const t = useT()
-      const sessionId = String(
-        props?.sessionId ?? props?.session?.sessionId ?? props?.session?.id ?? 'current',
-      )
+      const sessionId = readSessionId(props)
       const [, bump] = useState(0)
       const [collections, setCollections] = useState(null)
       const [cursor, setCursor] = useState(0)
@@ -6055,8 +6071,12 @@ window.__ModuleLoader__.load({
 
       useEffect(() => KB_SCOPE_STORE.subscribe(() => bump((n) => n + 1)), [])
 
-      const open = KB_SCOPE_STORE.isOpen(sessionId)
-      const selected = KB_SCOPE_STORE.namesOf(sessionId)
+      /*
+       * sessionId 拿不到时一律当作「没有选中」，
+       * 既不读也不写 store——避免用 'null' 这种编造出来的键污染状态。
+       */
+      const open = sessionId !== null && KB_SCOPE_STORE.isOpen(sessionId)
+      const selected = sessionId === null ? [] : KB_SCOPE_STORE.namesOf(sessionId)
 
       useEffect(() => {
         if (!open) return undefined
@@ -6072,6 +6092,7 @@ window.__ModuleLoader__.load({
       }, [open])
 
       const sync = useCallback((names) => {
+        if (sessionId === null) return
         api('composer-scope', { action: 'set', sessionId, names }).catch(() => {})
       }, [sessionId])
 
@@ -6082,6 +6103,9 @@ window.__ModuleLoader__.load({
       const close = useCallback(() => {
         KB_SCOPE_STORE.setOpen(sessionId, false)
       }, [sessionId])
+
+      // hooks 已全部执行完，这里可以安全短路
+      if (sessionId === null) return null
 
       if (!open) {
         /*
@@ -6220,13 +6244,15 @@ window.__ModuleLoader__.load({
       }, [sessionId, turn])
 
       if (recall === null) return null
-      if (!Array.isArray(recall.hits) || recall.hits.length === 0) {
-        // 检索跑了但一条没命中，也要说一声，否则用户以为没生效
-        return h('div', { className: 'kb-recall kb-recall-empty' },
-          h('span', { className: 'kb-recall-icon' }, h(KnowledgeIcon, { size: 13, active: false })),
-          h('span', null, fmt(t('recall.turnNone'), { names: (recall.names ?? []).join('、') })),
-        )
-      }
+      /*
+       * 一条都没命中就什么都不显示。
+       *
+       * 之前这里会渲染一个「本轮没有检索到相关内容」的小框：
+       * 但本轮还没调工具、或模型压根没查，都会导致零命中，
+       * 于是这个框在对话里时不时冒出来，看着像故障。
+       * 真没命中时，回答本身会说明，不需要额外占位。
+       */
+      if (!Array.isArray(recall.hits) || recall.hits.length === 0) return null
 
       const shown = expanded ? recall.hits : recall.hits.slice(0, 3)
 
@@ -6519,7 +6545,9 @@ window.__ModuleLoader__.load({
             ui: {
               kind: 'action',
               run(session) {
-                const id = String(session?.sessionId ?? 'current')
+                const id = readSessionId(session)
+                // 拿不到会话标识就不打开——宁可不响应，也不要写进错误的键
+                if (id === null) return
                 KB_SCOPE_STORE.setOpen(id, !KB_SCOPE_STORE.isOpen(id))
               },
             },

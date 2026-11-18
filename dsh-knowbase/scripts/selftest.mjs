@@ -2296,6 +2296,58 @@ await test('安全：重定向到内网地址被拒绝', async () => {
   }
 })
 
+await test('会话标识不造假，空数据显示不闪', async () => {
+  const { readFileSync } = await import('node:fs')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  /*
+   * 这条守的是一个「选择框时不时自己冒出来」的 bug。
+   *
+   * 根因：选择条与斜杠菜单都曾把取不到的会话标识回落成 'current'。
+   * 真实会话与 'current' 是两个独立存储键，谁打开过就记在谁名下；
+   * 组件某一拍拿到 undefined 时读的是另一份状态，
+   * 于是框会莫名其妙地出现或消失。
+   */
+
+  // 统一的取值函数必须存在，且取不到时返回 null
+  if (!/function readSessionId\(/.test(client)) {
+    throw new Error('缺少统一的会话标识取值函数')
+  }
+  if (!/return id === '' \? null : id/.test(client)) {
+    throw new Error('取不到标识时没有返回 null')
+  }
+
+  // 绝不回落成 'current'
+  const fallbacks = [...client.matchAll(/['"]current['"]/g)]
+  for (const hit of fallbacks) {
+    const lineStart = client.lastIndexOf('\n', hit.index) + 1
+    const lineEnd = client.indexOf('\n', hit.index)
+    const line = client.slice(lineStart, lineEnd)
+    // 允许出现在注释里
+    if (!/^\s*(\*|\/\/|\/\*)/.test(line)) {
+      throw new Error(`仍有回落 'current' 的代码：${line.trim().slice(0, 80)}`)
+    }
+  }
+
+  // 标识为空时必须短路，不读也不写 store
+  if (!/if \(sessionId === null\) return null/.test(client)) {
+    throw new Error('标识为空时没有短路，会用 null 当键污染状态')
+  }
+  if (!/const open = sessionId !== null && KB_SCOPE_STORE\.isOpen\(sessionId\)/.test(client)) {
+    throw new Error('读 open 状态前没有判空')
+  }
+  if (!/if \(sessionId === null\) return\s*\n\s*api\('composer-scope'/.test(client)) {
+    throw new Error('写 composer-scope 前没有判空')
+  }
+
+  // 零命中不渲染，避免冒出一个「没检索到」的小框
+  if (!/recall\.hits\.length === 0\) return null/.test(client)) {
+    throw new Error('零命中时仍会渲染占位框')
+  }
+
+  ok('会话标识不造假，空数据显示不闪', "不再回落 'current'；标识为空即短路；零命中不占位")
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

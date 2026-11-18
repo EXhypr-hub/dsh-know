@@ -40,7 +40,7 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.6.8'
+const VERSION = '0.6.9'
 const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
