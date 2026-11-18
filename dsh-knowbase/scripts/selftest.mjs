@@ -1959,6 +1959,84 @@ await test('对话选库：会话级选择', async () => {
   ok('对话选库：会话级选择', '按 sessionId 存储、标记优先、set/get/clear 齐全、过期清理')
 })
 
+await test('检索摘要：按回合存取', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // 存摘要的容器与三个方法
+  if (!/this\.turnRecalls = new Map\(\)/.test(host)) throw new Error('缺少 turnRecalls 存储')
+  for (const fn of ['rememberTurnRecall', 'getTurnRecall', 'clearTurnRecall']) {
+    if (!new RegExp(`\\b${fn}\\s*\\(`).test(host)) throw new Error(`缺少 ${fn}`)
+  }
+
+  // 键必须带 sessionId 与 turn，两个会话同一回合不能互相覆盖
+  if (!/const key = `\$\{sid\}#\$\{t\}`/.test(host)) {
+    throw new Error('摘要键没有同时带 sessionId 与 turn')
+  }
+
+  // 只留展示字段：正文必须截断，不能把整段原文存进内存
+  if (!/RECALL_TEXT_CHARS/.test(host)) throw new Error('正文没有截断，会撑大内存')
+  if (!/\.slice\(0, KnowledgeBase\.RECALL_TEXT_CHARS\)/.test(host)) {
+    throw new Error('正文截断没接上')
+  }
+
+  // 上限与淘汰
+  if (!/RECALL_LIMIT/.test(host)) throw new Error('没有条目上限')
+  if (!/while \(this\.turnRecalls\.size > KnowledgeBase\.RECALL_LIMIT\)/.test(host)) {
+    throw new Error('没有超限淘汰')
+  }
+
+  // 过期清理要连摘要一起清
+  if (!/for \(const \[key, value\] of this\.turnRecalls\)/.test(host)) {
+    throw new Error('过期清理没覆盖检索摘要')
+  }
+
+  // 路由 set/get
+  if (!/'\/api\/dsh-knowbase\/turn-recall'/.test(host)) throw new Error('缺少 turn-recall 路由')
+  for (const action of ['get', 'clear']) {
+    if (!new RegExp(`body\\.action === '${action}'`).test(host)) {
+      throw new Error(`turn-recall 不支持 ${action}`)
+    }
+  }
+
+  // pre-step 要把 turn 传下去，否则摘要键拼不出来
+  if (!/payload\?\.turn/.test(host)) throw new Error('pre-step 没把 turn 传下去')
+
+  ok('检索摘要：按回合存取', '按 sessionId+turn 存、正文截断、有上限与过期清理、路由齐全')
+})
+
+await test('检索摘要：前端展示', async () => {
+  const { readFileSync } = await import('node:fs')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  if (!/function TurnRecallCard/.test(client)) throw new Error('缺少 TurnRecallCard 组件')
+
+  // 挂在回合尾部，且注册失败不能让插件崩
+  if (!/slots\.inject\('conversation\.chat\.turnTail'/.test(client)) {
+    throw new Error('没有注册到 conversation.chat.turnTail')
+  }
+  if (!/try \{\s*slots\.inject\('conversation\.chat\.turnTail'/.test(client)) {
+    throw new Error('turnTail 注册没有 try 包裹，旧版 DSH 会崩')
+  }
+
+  // 没有摘要时必须返回 null，不渲染空卡片
+  if (!/if \(recall === null\) return null/.test(client)) {
+    throw new Error('没有摘要时没短路，会渲染空卡片')
+  }
+
+  // 零命中也要有话说，别让用户以为没生效
+  if (!/recall\.turnNone/.test(client)) throw new Error('零命中时没有提示')
+
+  // 收起态要留徽标而不是整块消失
+  if (!/kb-scope-badge/.test(client)) throw new Error('选择条收起后没有徽标')
+  if (!/if \(picked\.length === 0\) return null/.test(client)) {
+    throw new Error('没选库时徽标应当不占位')
+  }
+
+  ok('检索摘要：前端展示', 'turnTail 卡片 + 收起态徽标，空数据不占位')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

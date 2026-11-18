@@ -40,7 +40,7 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.6.5'
+const VERSION = '0.6.6'
 const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
@@ -278,6 +278,12 @@ class KnowledgeBase {
      * 下一次提问时按这里的选择自动检索。
      */
     this.composerScopes = new Map()
+    /**
+     * 每轮的检索摘要：`${sessionId}#${turn}` → { names, hits, at }。
+     * 对话页在回合尾部读它来显示「知识库 · 库名 · N 条」。
+     * 只留展示字段，不存整段原文。
+     */
+    this.turnRecalls = new Map()
     /** Cordis 核心方法探测结果（apply 时确定，同步可靠） */
     this.compatCore = null
     /** 可选服务探测结果（inject 回调里确定，可能一直为 null） */
@@ -1658,7 +1664,7 @@ this.store.deleteDocument(id)
    * @param {string} [sessionId] 用于查会话级选择
    * @returns {Promise<{ messages: object[], names: string[] } | null>}
    */
-  async buildComposerInjection(messages, signal, sessionId) {
+  async buildComposerInjection(messages, signal, sessionId, turn) {
     const list = Array.isArray(messages) ? messages : []
     const last = list[list.length - 1]
     if (last?.role !== 'user' || !Array.isArray(last.content)) return null
@@ -1739,7 +1745,86 @@ this.store.deleteDocument(id)
       ],
     }
 
+    /*
+     * 记下这一轮的检索摘要，供对话页在回合尾部展示。
+     * 只留展示需要的字段，不存整段原文——摘要表要长期驻留内存。
+     */
+    this.rememberTurnRecall(sessionId, turn, collections.map((c) => c.name), results)
+
     return { messages: [...list.slice(0, -1), next], names: collections.map((c) => c.name) }
+  }
+
+  /* ────────────────────── 回合检索摘要 ────────────────────── */
+
+  /** 摘要条目上限，超出丢最旧的 */
+  static get RECALL_LIMIT() {
+    return 200
+  }
+
+  /** 每条命中的正文只留这么多字 */
+  static get RECALL_TEXT_CHARS() {
+    return 200
+  }
+
+  /**
+   * 存下某一轮的检索摘要。
+   * @param {string} sessionId
+   * @param {number} turn
+   * @param {string[]} names 本轮用到的库名
+   * @param {{collection: string, hits: object[], note?: string}[]} results
+   */
+  rememberTurnRecall(sessionId, turn, names, results) {
+    const sid = String(sessionId ?? '')
+    const t = Number(turn)
+    if (sid === '' || !Number.isFinite(t)) return
+
+    const hits = []
+    for (const result of results) {
+      for (const hit of result?.hits ?? []) {
+        hits.push({
+          collection: result?.collection ?? '',
+          title: hit?.title ?? '',
+          page: hit?.page ?? null,
+          heading: hit?.heading ?? '',
+          text: String(hit?.text ?? '').slice(0, KnowledgeBase.RECALL_TEXT_CHARS).trim(),
+          similarity: typeof hit?.similarity === 'number' ? Number(hit.similarity.toFixed(3)) : null,
+        })
+      }
+    }
+
+    const key = `${sid}#${t}`
+    this.turnRecalls.set(key, { sessionId: sid, turn: t, names, hits, at: Date.now() })
+
+    // 超上限丢最旧的
+    while (this.turnRecalls.size > KnowledgeBase.RECALL_LIMIT) {
+      const oldest = this.turnRecalls.keys().next().value
+      if (oldest === undefined) break
+      this.turnRecalls.delete(oldest)
+    }
+  }
+
+  /** 读回某一轮的检索摘要 */
+  getTurnRecall(sessionId, turn) {
+    const sid = String(sessionId ?? '')
+    const t = Number(turn)
+    if (sid === '' || !Number.isFinite(t)) return null
+    const hit = this.turnRecalls.get(`${sid}#${t}`)
+    if (!hit) return null
+    return { sessionId: hit.sessionId, turn: hit.turn, names: hit.names, hits: hit.hits, at: hit.at }
+  }
+
+  /** 清掉某个会话的全部摘要 */
+  clearTurnRecall(sessionId) {
+    const sid = String(sessionId ?? '')
+    const prefix = `${sid}#`
+    let removed = 0
+    for (const key of [...this.turnRecalls.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.turnRecalls.delete(key)
+        removed++
+      }
+    }
+    return removed
   }
 
   /* ────────────────────── 会话级选库 ────────────────────── */
@@ -1782,6 +1867,11 @@ this.store.deleteDocument(id)
     const now = Date.now()
     for (const [id, value] of this.composerScopes) {
       if (now - value.at > maxAgeMs) this.composerScopes.delete(id)
+    }
+
+    // 检索摘要也一起清理，避免长时间挂机后内存只增不减
+    for (const [key, value] of this.turnRecalls) {
+      if (now - value.at > maxAgeMs) this.turnRecalls.delete(key)
     }
   }
 
@@ -2300,7 +2390,12 @@ export function apply(ctx, config) {
       // 顺手清理过期会话选择，避免长期运行后 Map 变大
       kb.pruneComposerScopes()
       const sessionId = payload?.agent?.id
-      const injected = await kb.buildComposerInjection(decision.messages, payload?.signal, sessionId)
+      const injected = await kb.buildComposerInjection(
+        decision.messages,
+        payload?.signal,
+        sessionId,
+        payload?.turn,
+      )
       if (injected === null) return decision
       return { ...decision, messages: injected.messages }
     } catch {
@@ -2391,6 +2486,18 @@ export function apply(ctx, config) {
       }
       if (body.action === 'clear') {
         return json({ ok: true, value: kb.setComposerScope(sid, []) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
+
+    /* ── 回合检索摘要：对话页在回合尾部读它 ── */
+    route('/api/dsh-knowbase/turn-recall', (body) => {
+      const sid = String(body.sessionId ?? '')
+      if (body.action === 'get') {
+        return json({ ok: true, value: kb.getTurnRecall(sid, body.turn) })
+      }
+      if (body.action === 'clear') {
+        return json({ ok: true, value: { removed: kb.clearTurnRecall(sid) } })
       }
       return fail('dsh-knowbase/bad-action', '未知操作')
     })

@@ -1201,6 +1201,166 @@ window.__ModuleLoader__.load({
 
 /* 测速结果：单独一行，窄抽屉里也看得见 */
 /* ── 输入框上方的知识库选择条 ── */
+/* 回合尾部的检索摘要 */
+.kb-recall {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: 11.5px;
+  animation: kb-fade-in 180ms ease both;
+}
+.kb-recall-empty {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-recall-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.kb-recall-icon { display: inline-flex; flex: none; color: var(--dsw-alias-brand-primary); }
+.kb-recall-title { flex: none; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.kb-recall-names {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-recall-count {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.kb-recall-caret {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  color: var(--dsw-alias-label-secondary);
+  transition: transform 160ms ease;
+}
+.kb-recall-caret-on { transform: rotate(90deg); }
+.kb-recall-list { margin-top: 6px; }
+.kb-recall-hit {
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-2);
+  margin-top: 4px;
+}
+.kb-recall-hit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.kb-recall-hit-i {
+  flex: none;
+  min-width: 14px;
+  font-size: 10px;
+  color: var(--dsw-alias-brand-primary);
+  font-variant-numeric: tabular-nums;
+}
+.kb-recall-hit-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+.kb-recall-hit-page {
+  flex: none;
+  font-size: 10px;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-recall-hit-heading {
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  margin-bottom: 2px;
+}
+.kb-recall-hit-text {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-recall-more {
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: center;
+}
+
+/* 收起态：输入框上方留一枚小徽标 */
+.kb-scope-badge-row {
+  display: flex;
+  margin: 0 0 8px;
+}
+.kb-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.kb-scope-badge:hover {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 55%, transparent);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.kb-scope-badge-n {
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-1);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.kb-scope-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-scope-badge-caret {
+  flex: none;
+  font-size: 9px;
+  color: var(--dsw-alias-label-secondary);
+  opacity: 0.7;
+}
+
 .kb-scope-bar {
   margin: 0 0 10px;
   padding: 8px;
@@ -1537,6 +1697,12 @@ window.__ModuleLoader__.load({
      */
     const DICT = {
   zh: {
+    'recall.turnNone': '「{names}」本轮没有检索到相关内容',
+    'recall.turnTitle': '知识库',
+    'recall.turnCount': '{n} 条',
+    'recall.untitled': '（未命名）',
+    'recall.page': '第 {n} 页',
+    'recall.more': '还有 {n} 条',
     'composer.empty': '还没有知识库，先去左侧栏建一个',
     'composer.pickHint': '还没选，用 ↑↓ 挑一个按空格勾上',
     'composer.chunks': '共 {n} 个片段',
@@ -1759,6 +1925,12 @@ window.__ModuleLoader__.load({
   },
 
   en: {
+    'recall.turnNone': 'No matches in {names} for this turn',
+    'recall.turnTitle': 'Knowledge base',
+    'recall.turnCount': '{n} hits',
+    'recall.untitled': '(untitled)',
+    'recall.page': 'p. {n}',
+    'recall.more': '{n} more',
     'composer.empty': 'No collections yet — create one from the sidebar',
     'composer.pickHint': 'Nothing picked yet — use ↑↓ then Space',
     'composer.chunks': '{n} chunks',
@@ -5898,7 +6070,27 @@ window.__ModuleLoader__.load({
         KB_SCOPE_STORE.setOpen(sessionId, false)
       }, [sessionId])
 
-      if (!open) return null
+      if (!open) {
+        /*
+         * 收起态：有选中就留一枚小徽标，点一下重新展开。
+         * 没选任何库时完全不占位，输入框保持原样。
+         */
+        const picked = KB_SCOPE_STORE.namesOf(sessionId)
+        if (picked.length === 0) return null
+
+        return h('div', { className: 'kb-scope-badge-row' },
+          h('button', {
+            className: 'kb-scope-badge',
+            onClick: () => KB_SCOPE_STORE.setOpen(sessionId, true),
+            title: t('composer.openDesc'),
+          },
+            h(KnowledgeIcon, { size: 13, active: false }),
+            h('span', { className: 'kb-scope-badge-n' }, String(picked.length)),
+            h('span', { className: 'kb-scope-badge-name' }, picked.join('、')),
+            h('span', { className: 'kb-scope-badge-caret' }, '▾'),
+          ),
+        )
+      }
 
       const list = collections ?? []
       const cursorSafe = list.length === 0 ? 0 : Math.min(cursor, list.length - 1)
@@ -5983,6 +6175,74 @@ window.__ModuleLoader__.load({
             h('kbd', null, 'Tab'), ' ', t('composer.keyToggle'),
           ),
           h('button', { className: 'kb-scope-close', onClick: close }, t('composer.done')),
+        ),
+      )
+    }
+
+    /* ══════════════════════════ 回合尾部的检索摘要 ══════════════════════════ */
+
+    /**
+     * 在助手回复之后展示「这轮用了哪个库、命中几条、命中什么」。
+     *
+     * 数据来自 Host 的 turn-recall 接口——pre-step 检索时按 sessionId+turn 存下的摘要。
+     * 没有摘要就返回 null，不占位也不报错。
+     */
+    function TurnRecallCard(props) {
+      const t = useT()
+      const sessionId = String(
+        props?.sessionId ?? props?.session?.sessionId ?? props?.session?.id ?? '',
+      )
+      const turn = Number(props?.turn ?? props?.turnNo ?? NaN)
+
+      const [recall, setRecall] = useState(null)
+      const [expanded, setExpanded] = useState(false)
+
+      useEffect(() => {
+        if (sessionId === '' || !Number.isFinite(turn)) return undefined
+        let cancelled = false
+        api('turn-recall', { action: 'get', sessionId, turn })
+          .then((value) => { if (!cancelled) setRecall(value ?? null) })
+          .catch(() => { if (!cancelled) setRecall(null) })
+        return () => { cancelled = true }
+      }, [sessionId, turn])
+
+      if (recall === null) return null
+      if (!Array.isArray(recall.hits) || recall.hits.length === 0) {
+        // 检索跑了但一条没命中，也要说一声，否则用户以为没生效
+        return h('div', { className: 'kb-recall kb-recall-empty' },
+          h('span', { className: 'kb-recall-icon' }, h(KnowledgeIcon, { size: 13, active: false })),
+          h('span', null, fmt(t('recall.turnNone'), { names: (recall.names ?? []).join('、') })),
+        )
+      }
+
+      const shown = expanded ? recall.hits : recall.hits.slice(0, 3)
+
+      return h('div', { className: 'kb-recall' },
+        h('button', {
+          className: 'kb-recall-head',
+          onClick: () => setExpanded((v) => !v),
+        },
+          h('span', { className: 'kb-recall-icon' }, h(KnowledgeIcon, { size: 13, active: false })),
+          h('span', { className: 'kb-recall-title' }, t('recall.turnTitle')),
+          h('span', { className: 'kb-recall-names' }, (recall.names ?? []).join('、')),
+          h('span', { className: 'kb-recall-count' }, fmt(t('recall.turnCount'), { n: recall.hits.length })),
+          h('span', { className: 'kb-recall-caret' + (expanded ? ' kb-recall-caret-on' : '') }, '›'),
+        ),
+        h('div', { className: 'kb-recall-list' },
+          shown.map((hit, i) => h('div', { className: 'kb-recall-hit', key: i },
+            h('div', { className: 'kb-recall-hit-head' },
+              h('span', { className: 'kb-recall-hit-i' }, String(i + 1)),
+              h('span', { className: 'kb-recall-hit-title' }, hit.title || t('recall.untitled')),
+              hit.page !== null && hit.page !== undefined
+                ? h('span', { className: 'kb-recall-hit-page' }, fmt(t('recall.page'), { n: hit.page }))
+                : null,
+            ),
+            hit.heading ? h('div', { className: 'kb-recall-hit-heading' }, hit.heading) : null,
+            h('div', { className: 'kb-recall-hit-text' }, hit.text ?? ''),
+          )),
+          !expanded && recall.hits.length > 3
+            ? h('div', { className: 'kb-recall-more' }, fmt(t('recall.more'), { n: recall.hits.length - 3 }))
+            : null,
         ),
       )
     }
@@ -6181,6 +6441,31 @@ window.__ModuleLoader__.load({
 
           return triggers.registerSource(source)
         })
+
+        /*
+         * ── 回合尾部的检索摘要 ──
+         *
+         * 挂在 conversation.chat.turnTail（回合动作行之前），
+         * 按 turn 读 Host 存下的搜索摘要，让用户看到这轮用了哪个库、命中什么。
+         * 旧版 DSH 没有这个 slot 时静默跳过。
+         */
+        if (typeof slots.inject === 'function') {
+          try {
+            slots.inject('conversation.chat.turnTail', () =>
+              slots.register(
+                {
+                  name: 'conversation.chat.turnTail',
+                  id: 'dsh-knowbase-recall',
+                  order: 20,
+                  inject: (sessionId) => ({ sessionId }),
+                },
+                TurnRecallCard,
+              ),
+            )
+          } catch {
+            // slot 不存在或注册失败：只是少了这张卡片，不影响其它功能
+          }
+        }
 
         /*
          * ── 输入框上方的知识库选择条 ──
