@@ -40,7 +40,7 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.6.7'
+const VERSION = '0.6.8'
 const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
@@ -1736,32 +1736,21 @@ this.store.deleteDocument(id)
      * 资料落在「输出」里，过程留在思考流里，正文保持干净。
      */
     const scopeNames = collections.map((c) => c.name)
-    const quoted = (arr) => arr.map((n) => "\u300c" + n + "\u300d").join("\u3001")
-    const hint = failures.length > 0 && scopeNames.length === 0
-      ? "【知识库】用户本轮选了 " + quoted(names)
-        + "，但都不存在或无法读取（" + failures.join("；") + "）。"
-        + "请如实告知用户这次没有取到知识库，不要凭记忆编造。"
-      : "【知识库】用户本轮选了 " + quoted(scopeNames) + "。"
-        + "请先调用 kb_search 工具检索（query 填用户的问题；collection 可省略，会自动查选中的库），"
-        + "再基于返回的片段回答，并在每处结论后标注文档名与页码。"
-        + "资料不足以回答时，明确说明「资料中未提及」。"
-
-    const guidanceMessage = {
-      id: randomUUID(),
-      role: 'user',
-      content: [{ type: 'text', text: hint }],
-      source: { kind: 'user' },
-    }
 
     /*
-     * 记下这一轮的选库情况，供对话页在回合尾部展示。
-     * 命中详情由 kb_search 的工具卡片承担，这里只留库名。
+     * 只记录，不往对话里塞任何东西。
+     *
+     * 指令改为走 systemPrompt.context()——那条通道在对话里
+     * 只显示为「上下文注入 · dsh-knowbase」一行（折叠在过程里），
+     * 不占正文，也不会被误认为是用户说的话。
      */
     this.rememberTurnRecall(sessionId, turn, scopeNames, [])
-    return {
-      messages: [...list, guidanceMessage],
-      names: scopeNames,
-    }
+
+    /*
+     * 返回 null：pre-step 不对消息做任何改动。
+     * 调用方拿到 null 就原样放行，用户看到的就是自己打的原话。
+     */
+    return { messages: list, names: scopeNames }
   }
 
   /* ────────────────────── 回合检索摘要 ────────────────────── */
@@ -2390,31 +2379,74 @@ export function apply(ctx, config) {
     return () => kb.stop()
   }, 'dsh-knowbase: lifecycle')
 
-  /* ── 对话内选库：提问前自动检索并注入 ── */
+  /* ── 对话内选库：只记录本轮信息，不改动任何消息 ── */
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
-    // 只有真正要进入下一步时才处理；reject 原样放行
     if (decision?.kind !== 'enter') return decision
 
     try {
       // 顺手清理过期会话选择，避免长期运行后 Map 变大
       kb.pruneComposerScopes()
       const sessionId = payload?.agent?.id
-      const injected = await kb.buildComposerInjection(
+      await kb.buildComposerInjection(
         decision.messages,
         payload?.signal,
         sessionId,
         payload?.turn,
       )
-      if (injected === null) return decision
-      return { ...decision, messages: injected.messages }
     } catch {
-      /*
-       * 注入失败绝不阻断提问。
-       * 用户选库是想让答案更准，不是想让消息发不出去。
-       */
-      return decision
+      // 记录失败不影响提问
     }
+
+    /*
+     * 永远原样放行。
+     *
+     * 给模型看的指令走 systemPrompt.context（上下文注入通道），
+     * 所以这里不需要也不应该改动 messages——那会在对话里留下消息卡片。
+     */
+    return decision
+  })
+
+  /* ── 对话内选库：把指令挂到「上下文注入」通道，不在对话里留消息 ── */
+  ctx.inject(['systemPrompt'], (scope) => {
+    const systemPrompt = scope.get('systemPrompt')
+    if (typeof systemPrompt?.context !== 'function') return undefined
+
+    /*
+     * 为什么走 systemPrompt.context 而不是改 messages：
+     *
+     * 改 messages（哪怕只是追加一条）会让对话里出现一张消息卡片——
+     * 用户明确要求「除了我的提问，其他都不要出现」。
+     *
+     * systemPrompt.context 注册的内容在对话里只显示为
+     * 「上下文注入 · dsh-knowbase」一行，折叠在过程区，不占正文。
+     *
+     * 每轮的会话标识从 context.agent.id 取。类型声明里 AssembleContext
+     * 只有 { scope, signal }，但 DSH 自己的 dev-context 就在用
+     * context.agent?.session，说明运行时确实带着 agent；这里用可选链兜底。
+     */
+    return systemPrompt.context({
+      name: 'dsh-knowbase',
+      // 放在靠后位置，让知识库约束跟在本轮其它上下文之后
+      order: 900,
+      interpolate: false,
+      text: (context) => {
+        try {
+          const sessionId = context?.agent?.id ?? context?.agent?.session?.id
+          if (sessionId === undefined) return ''
+          const picked = kb.composerScopes.get(String(sessionId))?.names ?? []
+          if (picked.length === 0) return ''
+          const quoted = picked.map((n) => `「${n}」`).join('、')
+          return `【知识库】用户本轮选了 ${quoted}。`
+            + '请先调用 kb_search 工具检索（query 填用户的问题；collection 可省略，会自动查选中的库），'
+            + '再基于返回的片段回答，并在每处结论后标注文档名与页码。'
+            + '资料不足以回答时，明确说明「资料中未提及」。'
+        } catch {
+          // 上下文装配阶段绝不抛错，否则整轮提示词会失败
+          return ''
+        }
+      },
+    })
   })
 
   /* ── 智能体工具：让模型能自己查库、导入、抓资料 ── */

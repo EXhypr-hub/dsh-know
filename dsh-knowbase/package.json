@@ -1,6 +1,6 @@
 {
   "name": "dsh-knowbase",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "private": true,
   "description": "DSH 本地知识库插件：文档导入、语义检索、权威来源采集",
   "type": "module",

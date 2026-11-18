@@ -2037,35 +2037,49 @@ await test('检索摘要：前端展示', async () => {
   ok('检索摘要：前端展示', 'turnTail 卡片 + 收起态徽标，空数据不占位')
 })
 
-await test('注入只给指令，不给资料', async () => {
+await test('指令走上下文注入，对话里不留消息', async () => {
   const { readFileSync } = await import('node:fs')
   const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   const tools = readFileSync(new URL('../lib/tools.js', import.meta.url), 'utf8')
 
   /*
    * 这条守的是一条体验问题链：
-   *   ① 最初把资料拼进用户那条消息 → 提问被污染
-   *   ② 改成本地独立消息 → 对话里出现一张巨大的资料卡片，淹没正文、无法折叠
-   *   ③ 现在改为「只给一句指令，让模型自己调 kb_search」
-   *      工具调用会渲染成可折叠的输入/输出卡片，资料落在输出里
+   *   ① 资料拼进用户那条消息 → 提问被污染
+   *   ② 改成独立消息 → 对话里出现巨大的资料卡片，淹没正文
+   *   ③ 改成短指令消息 → 仍然在对话里多出一张卡片
+   *   ④ 现在：指令走 systemPrompt.context，对话里只显示「上下文注入」一行
    */
 
   // 不得再往上下文里塞资料正文
   if (/formatInjection\(/.test(host)) {
-    throw new Error('仍在注入资料正文，会重新铺出那张大卡片')
+    throw new Error('仍在注入资料正文')
   }
 
-  // 必须是"追加一条短指令消息"
-  if (!/messages: \[\.\.\.list, guidanceMessage\]/.test(host)) {
-    throw new Error('没有追加指令消息')
+  // pre-step 必须原样放行，不改 messages
+  if (!/永远原样放行/.test(host)) {
+    throw new Error('pre-step 缺少「原样放行」的说明')
   }
-  if (!/先调用 kb_search/.test(host)) {
-    throw new Error('指令里没让模型调 kb_search')
+  if (/return \{ \.\.\.decision, messages: injected\.messages \}/.test(host)) {
+    throw new Error('pre-step 仍在改写消息，对话里会多出卡片')
   }
 
-  // 指令要能带上选中的库名，并允许省略 collection
-  if (!/collection 可省略/.test(host)) {
-    throw new Error('指令没说明 collection 可省略')
+  // 指令必须走 systemPrompt.context
+  if (!/systemPrompt\.context\(\{/.test(host)) {
+    throw new Error('没有走 systemPrompt.context 通道')
+  }
+  if (!/name: 'dsh-knowbase'/.test(host)) {
+    throw new Error('上下文注入缺少稳定名字')
+  }
+  // 每轮要按会话判断，没选库就不注入
+  if (!/context\?\.agent\?\.id/.test(host)) {
+    throw new Error('上下文注入没按会话取标识')
+  }
+  if (!/picked\.length === 0\) return ''/.test(host)) {
+    throw new Error('没选库时应当注入空串，而不是一段默认文案')
+  }
+  // 装配阶段不许抛错
+  if (!/上下文装配阶段绝不抛错/.test(host)) {
+    throw new Error('上下文注入缺少 try 保护')
   }
 
   // 工具侧：没传 collection 时回落到会话选中的库
@@ -2075,13 +2089,11 @@ await test('注入只给指令，不给资料', async () => {
   if (!/exec\?\.agent\?\.id/.test(tools)) {
     throw new Error('kb_search 没从 exec 里取 sessionId')
   }
-
-  // 多库时要说明范围，避免模型以为只查了一个库
   if (!/scopeNote/.test(tools)) {
     throw new Error('多选库时没有说明检索范围')
   }
 
-  ok('注入只给指令，不给资料', '资料改由 kb_search 工具卡片承载，工具自动落到选中的库')
+  ok('指令走上下文注入，对话里不留消息', 'pre-step 原样放行，指令折叠显示，工具自动落到选中的库')
 })
 
 /* ───────────────── 收尾 ───────────────── */
