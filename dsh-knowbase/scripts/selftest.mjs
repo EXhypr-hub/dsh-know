@@ -1909,9 +1909,9 @@ await test('对话选库：Host 注入不阻断', async () => {
     throw new Error('注入失败时没有原样放行，可能阻断提问')
   }
 
-  // 没有标记时必须提前返回 null，不做任何检索
-  if (!/if \(!combined\.includes\(KB_REF_PREFIX\)\) return null/.test(host)) {
-    throw new Error('没有标记时没短路，会白跑检索')
+  // 没有标记且没有会话级选择时必须提前返回 null，不做任何检索
+  if (!/if \(names\.length === 0\) return null/.test(host)) {
+    throw new Error('既无标记也无会话选择时没短路，会白跑检索')
   }
 
   // 客户端要注册 @ 来源，且缺 inputTriggers 时跳过而不是崩
@@ -1925,6 +1925,38 @@ await test('对话选库：Host 注入不阻断', async () => {
   if (!/serialize: async \(ref\) => ref/.test(client)) throw new Error('serialize 与 ref 不一致')
 
   ok('对话选库：Host 注入不阻断', 'pre-step 已接，无标记短路，异常放行，引用形态一致')
+})
+
+await test('对话选库：会话级选择', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 会话选择要按 sessionId 存在 Host 侧，提问时能读回
+  if (!/this\.composerScopes = new Map\(\)/.test(host)) throw new Error('缺少会话选择存储')
+  if (!/setComposerScope\(sessionId, names\)/.test(host)) throw new Error('缺少 setComposerScope')
+  if (!/getComposerScope\(sessionId\)/.test(host)) throw new Error('缺少 getComposerScope')
+
+  // 两个来源都要接：消息里的 @kb: 标记，以及会话级选择
+  if (!/combined\.includes\(KB_REF_PREFIX\)/.test(host)) throw new Error('没读消息里的 @kb: 标记')
+  if (!/this\.composerScopes\.get\(String\(sessionId\)\)/.test(host)) throw new Error('没读会话级选择')
+
+  // 标记优先于会话选择
+  const markerFirst = /if \(combined\.includes\(KB_REF_PREFIX\)\)[\s\S]{0,200}?if \(names\.length === 0 && sessionId !== undefined\)/.test(host)
+  if (!markerFirst) throw new Error('两个来源的优先级不对，消息标记应当优先')
+
+  // 路由要存在且支持 set/get/clear
+  if (!/'\/api\/dsh-knowbase\/composer-scope'/.test(host)) throw new Error('缺少 composer-scope 路由')
+  for (const action of ['set', 'get', 'clear']) {
+    if (!new RegExp(`body\\.action === '${action}'`).test(host)) throw new Error(`composer-scope 不支持 ${action}`)
+  }
+
+  // 会话选择要在 pre-step 里按 agent.id 查
+  if (!/payload\?\.agent\?\.id/.test(host)) throw new Error('pre-step 没传会话 id')
+
+  // 过期会话要清理，否则 Map 会一直长
+  if (!/pruneComposerScopes/.test(host)) throw new Error('缺少过期会话清理')
+
+  ok('对话选库：会话级选择', '按 sessionId 存储、标记优先、set/get/clear 齐全、过期清理')
 })
 
 /* ───────────────── 收尾 ───────────────── */

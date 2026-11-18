@@ -272,6 +272,12 @@ class KnowledgeBase {
     this.drivesCache = null
     /** 向量缓存：key = collectionId|modelId，值已反序列化成 Float32Array */
     this.vectorCache = new Map()
+    /**
+     * 会话级的选库状态：sessionId → { names, at }。
+     * 由客户端在输入框上方的选择条里勾选后同步过来，
+     * 下一次提问时按这里的选择自动检索。
+     */
+    this.composerScopes = new Map()
     /** Cordis 核心方法探测结果（apply 时确定，同步可靠） */
     this.compatCore = null
     /** 可选服务探测结果（inject 回调里确定，可能一直为 null） */
@@ -1639,19 +1645,20 @@ this.store.deleteDocument(id)
   /* ────────────────────── 对话内选库 → 自动检索 ────────────────────── */
 
   /**
-   * 用户从输入框的 `@` 菜单选了知识库时，在提问真正进入模型之前
-   * 把该库的检索结果注入这一轮上下文。
+   * 每次提问前，按当前会话选中的知识库自动检索并注入资料。
    *
-   * 这是「问题向量化 → 相似度检索 → 增强提示」三步的落地：
-   * 检索复用 semanticSearch（向量 + 关键词 + RRF + 可选重排），
-   * 注入则改写成一条内容更完整的 user 消息。
+   * 两个来源，优先级从高到低：
+   *   1. 消息文本里的 `@kb:库名` 标记（输入框 @ 菜单插入）
+   *   2. 会话级的库选择（输入框上方那个选择条，经 composer-scope 接口同步过来）
    *
-   * @param {readonly object[]} messages 本轮将要进入模型的消息
+   * 都没有就原样放行，不做任何检索。
+   *
+   * @param {readonly object[]} messages
    * @param {AbortSignal} [signal]
+   * @param {string} [sessionId] 用于查会话级选择
    * @returns {Promise<{ messages: object[], names: string[] } | null>}
-   *   没有 `@kb:` 标记时返回 null（调用方原样放行）。
    */
-  async buildComposerInjection(messages, signal) {
+  async buildComposerInjection(messages, signal, sessionId) {
     const list = Array.isArray(messages) ? messages : []
     const last = list[list.length - 1]
     if (last?.role !== 'user' || !Array.isArray(last.content)) return null
@@ -1661,13 +1668,28 @@ this.store.deleteDocument(id)
     if (textBlocks.length === 0) return null
 
     const combined = textBlocks.map((b) => b.text).join('\n')
-    if (!combined.includes(KB_REF_PREFIX)) return null
 
     // 用已知库名精确匹配，带空格的库名才认得出来
     const knownNames = this.store.listCollections().map((c) => c.name)
-    const { text: question, names } = stripKbRefs(combined, { knownNames })
-    if (names.length === 0) return null
 
+    let names = []
+    let question = combined
+
+    if (combined.includes(KB_REF_PREFIX)) {
+      const parsed = stripKbRefs(combined, { knownNames })
+      names = parsed.names
+      question = parsed.text
+    }
+
+    // 消息里没有显式标记，再看会话级选择
+    if (names.length === 0 && sessionId !== undefined) {
+      const scoped = this.composerScopes.get(String(sessionId))
+      if (Array.isArray(scoped?.names) && scoped.names.length > 0) {
+        names = scoped.names
+      }
+    }
+
+    if (names.length === 0) return null
     if (signal?.aborted) return null
 
     const collections = []
@@ -1720,7 +1742,48 @@ this.store.deleteDocument(id)
     return { messages: [...list.slice(0, -1), next], names: collections.map((c) => c.name) }
   }
 
-  /* ────────────────────── 对话内选库结束 ────────────────────── */
+  /* ────────────────────── 会话级选库 ────────────────────── */
+
+  /**
+   * 记录某个会话当前选中了哪些知识库。
+   * 由客户端在用户勾选后同步过来，供下一次提问时自动检索。
+   *
+   * @param {string} sessionId
+   * @param {string[]} names
+   */
+  setComposerScope(sessionId, names) {
+    const id = String(sessionId ?? '').trim()
+    if (id === '') return { sessionId: '', names: [] }
+
+    const clean = [...new Set(
+      (Array.isArray(names) ? names : [])
+        .map((n) => String(n ?? '').trim())
+        .filter((n) => n !== ''),
+    )]
+
+    if (clean.length === 0) this.composerScopes.delete(id)
+    else this.composerScopes.set(id, { names: clean, at: Date.now() })
+
+    return { sessionId: id, names: clean }
+  }
+
+  /** 读回某个会话的选库状态 */
+  getComposerScope(sessionId) {
+    const id = String(sessionId ?? '').trim()
+    const hit = this.composerScopes.get(id)
+    return { sessionId: id, names: hit?.names ?? [] }
+  }
+
+  /**
+   * 清掉太久没动静的会话选择。
+   * 会话关了不一定会通知到这里，所以按时间兜底，避免 Map 无限增长。
+   */
+  pruneComposerScopes(maxAgeMs = 12 * 60 * 60 * 1000) {
+    const now = Date.now()
+    for (const [id, value] of this.composerScopes) {
+      if (now - value.at > maxAgeMs) this.composerScopes.delete(id)
+    }
+  }
 
   /* ────────────────────── 兼容性诊断 ────────────────────── */
 
@@ -2234,7 +2297,10 @@ export function apply(ctx, config) {
     if (decision?.kind !== 'enter') return decision
 
     try {
-      const injected = await kb.buildComposerInjection(decision.messages, payload?.signal)
+      // 顺手清理过期会话选择，避免长期运行后 Map 变大
+      kb.pruneComposerScopes()
+      const sessionId = payload?.agent?.id
+      const injected = await kb.buildComposerInjection(decision.messages, payload?.signal, sessionId)
       if (injected === null) return decision
       return { ...decision, messages: injected.messages }
     } catch {
@@ -2313,6 +2379,21 @@ export function apply(ctx, config) {
     }
 
     route('/api/dsh-knowbase/status', () => json({ ok: true, value: kb.status() }))
+
+    /* ── 会话级选库：输入框上方的选择条读写它 ── */
+    route('/api/dsh-knowbase/composer-scope', (body) => {
+      const sid = String(body.sessionId ?? '')
+      if (body.action === 'set') {
+        return json({ ok: true, value: kb.setComposerScope(sid, body.names) })
+      }
+      if (body.action === 'get') {
+        return json({ ok: true, value: kb.getComposerScope(sid) })
+      }
+      if (body.action === 'clear') {
+        return json({ ok: true, value: kb.setComposerScope(sid, []) })
+      }
+      return fail('dsh-knowbase/bad-action', '未知操作')
+    })
 
     route('/api/dsh-knowbase/collections', (body) => {
       if (body.action === 'create') {

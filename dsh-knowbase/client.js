@@ -1200,6 +1200,194 @@ window.__ModuleLoader__.load({
 .kb-check input { accent-color: var(--dsw-alias-brand-primary); }
 
 /* 测速结果：单独一行，窄抽屉里也看得见 */
+/* ── 输入框上方的知识库选择条 ── */
+.kb-scope-bar {
+  margin: 0 0 10px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  animation: kb-fade-in 180ms ease both;
+  outline: none;
+  font-size: 12px;
+}
+.kb-scope-bar:focus-visible {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 55%, transparent);
+}
+
+/* 顶部：标题 + 已选 chip + 片段数 */
+.kb-scope-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.kb-scope-count {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.kb-scope-count[data-on='true'] {
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-1);
+  font-weight: 600;
+}
+.kb-scope-title {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  letter-spacing: 0.01em;
+}
+.kb-scope-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.kb-scope-hint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: none;
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, transparent);
+  color: var(--dsw-alias-brand-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 130ms ease;
+}
+.kb-scope-chip:hover { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent); }
+.kb-scope-chip-x { opacity: 0.6; font-size: 11px; line-height: 1; }
+.kb-scope-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 库列表：纵向，每库一行，右侧灰色文档数 */
+.kb-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.kb-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.kb-scope-row-cur { background: var(--dsw-alias-bg-layer-2); }
+.kb-scope-check {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l1));
+  font-size: 9px;
+  line-height: 11px;
+  text-align: center;
+  color: transparent;
+}
+.kb-scope-row-on .kb-scope-check {
+  background: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-1);
+}
+.kb-scope-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-scope-row-on .kb-scope-name { font-weight: 600; }
+.kb-scope-docs {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.kb-scope-empty {
+  padding: 10px;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: center;
+}
+
+/* 底部：快捷键提示 + 完成 */
+.kb-scope-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+.kb-scope-keys {
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-secondary);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.kb-scope-keys kbd {
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-2);
+  font: inherit;
+  font-size: 9.5px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-secondary);
+}
+.kb-scope-close {
+  flex: none;
+  padding: 3px 14px;
+  border-radius: 6px;
+  border: none;
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-1);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 130ms ease;
+}
+.kb-scope-close:hover { opacity: 0.86; }
+
 .kb-bench {
   display: block;
   margin-top: 8px;
@@ -1315,6 +1503,31 @@ window.__ModuleLoader__.load({
       }, [])
     }
 
+    /**
+     * 插件加载时就把样式挂上，不等任何面板组件挂载。
+     *
+     * 原来只在主面板/侧栏里调 useStyles()，于是出现一个坑：
+     * 输入框上方的知识库选择条渲染在对话页，而那两个面板当时并不一定挂载过，
+     * 样式就没注入 —— 选择条裸奔成一行没有任何边框与间距的文字。
+     */
+    function installStyles() {
+      if (typeof document === 'undefined') return () => {}
+      if (document.querySelector(`style[data-plugin-css="${CSS_VERSION}"]`) !== null) {
+        return () => {}
+      }
+      for (const stale of document.querySelectorAll('style[data-plugin="dsh-knowbase"]')) {
+        stale.remove()
+      }
+      const el = document.createElement('style')
+      el.dataset.plugin = 'dsh-knowbase'
+      el.dataset.pluginCss = CSS_VERSION
+      el.textContent = css
+      document.head.appendChild(el)
+      return () => {
+        try { el.remove() } catch { /* 卸载时忽略 */ }
+      }
+    }
+
     /* ══════════════════════════ 界面文案字典 ══════════════════════════ */
 
     /*
@@ -1324,6 +1537,16 @@ window.__ModuleLoader__.load({
      */
     const DICT = {
   zh: {
+    'composer.empty': '还没有知识库，先去左侧栏建一个',
+    'composer.pickHint': '还没选，用 ↑↓ 挑一个按空格勾上',
+    'composer.chunks': '共 {n} 个片段',
+    'composer.remove': '取消这个库',
+    'composer.keyClose': '收起',
+    'composer.keyMove': '选择',
+    'composer.keyToggle': '勾选/取消',
+    'composer.done': '完成',
+    'composer.open': '选择知识库',
+    'composer.openDesc': '选中后每次提问都会自动检索这些库',
     /* 顶栏 */
     'composer.group': '知识库',
     'composer.docs': '{n} 份文档',
@@ -1536,6 +1759,16 @@ window.__ModuleLoader__.load({
   },
 
   en: {
+    'composer.empty': 'No collections yet — create one from the sidebar',
+    'composer.pickHint': 'Nothing picked yet — use ↑↓ then Space',
+    'composer.chunks': '{n} chunks',
+    'composer.remove': 'Remove this collection',
+    'composer.keyClose': 'close',
+    'composer.keyMove': 'move',
+    'composer.keyToggle': 'toggle',
+    'composer.done': 'Done',
+    'composer.open': 'Knowledge base',
+    'composer.openDesc': 'Picked collections are searched before every question',
     'composer.group': 'Knowledge base',
     'composer.docs': '{n} documents',
     'recall.emptyTitle': 'Enter a query to start testing',
@@ -1709,6 +1942,63 @@ window.__ModuleLoader__.load({
      * 初始实现就用内置中文兜底，而不是返回 key——
      * 否则注册失败时界面会直接露出 header.title 这种原始 key。
      */
+    /*
+     * ── 会话级知识库选择 ──
+     *
+     * 用户在输入框上方的选择条里勾选的库，按 sessionId 分别记录。
+     * 状态放在模块级，命令（打开/关闭）与选择条组件（渲染）都能读，
+     * 互不依赖父子关系。改动后同步给 Host，供提问前自动检索。
+     */
+    const KB_SCOPE_STORE = {
+      /** sessionId -> Set<库名> */
+      selected: new Map(),
+      /** 正在展开选择条的 sessionId */
+      open: new Set(),
+      listeners: new Set(),
+
+      namesOf(sessionId) {
+        return [...(this.selected.get(String(sessionId)) ?? [])]
+      },
+
+      isOpen(sessionId) {
+        return this.open.has(String(sessionId))
+      },
+
+      setOpen(sessionId, open) {
+        const id = String(sessionId)
+        if (open) this.open.add(id)
+        else this.open.delete(id)
+        this.emit()
+      },
+
+      toggle(sessionId, name) {
+        const id = String(sessionId)
+        const set = new Set(this.selected.get(id) ?? [])
+        if (set.has(name)) set.delete(name)
+        else set.add(name)
+        if (set.size === 0) this.selected.delete(id)
+        else this.selected.set(id, set)
+        this.emit()
+        return [...set]
+      },
+
+      clear(sessionId) {
+        this.selected.delete(String(sessionId))
+        this.emit()
+      },
+
+      subscribe(fn) {
+        this.listeners.add(fn)
+        return () => this.listeners.delete(fn)
+      },
+
+      emit() {
+        for (const fn of this.listeners) {
+          try { fn() } catch { /* 单个监听器失败不影响其他 */ }
+        }
+      },
+    }
+
     let translate = (key, params) => fmt(DICT.zh[key] ?? key, params)
     const localeListeners = new Set()
 
@@ -5560,6 +5850,143 @@ window.__ModuleLoader__.load({
 
     /* ══════════════════════════ 存储与清理结束 ══════════════════════════ */
 
+    /* ══════════════════════════ 知识库选择条 ══════════════════════════ */
+
+    /**
+     * 输入框上方的知识库选择条。
+     *
+     * 由 /知识库 命令展开，勾选的库记在 KB_SCOPE_STORE 里（按会话隔离），
+     * 每次变动同步给 Host，提问前 Host 会按选择自动检索并注入资料。
+     */
+    function KbScopeBar(props) {
+      const t = useT()
+      const sessionId = String(
+        props?.sessionId ?? props?.session?.sessionId ?? props?.session?.id ?? 'current',
+      )
+      const [, bump] = useState(0)
+      const [collections, setCollections] = useState(null)
+      const [cursor, setCursor] = useState(0)
+      const barRef = useRef(null)
+
+      useEffect(() => KB_SCOPE_STORE.subscribe(() => bump((n) => n + 1)), [])
+
+      const open = KB_SCOPE_STORE.isOpen(sessionId)
+      const selected = KB_SCOPE_STORE.namesOf(sessionId)
+
+      useEffect(() => {
+        if (!open) return undefined
+        let cancelled = false
+        api('collections', { action: 'list' })
+          .then((list) => { if (!cancelled) setCollections(Array.isArray(list) ? list : []) })
+          .catch(() => { if (!cancelled) setCollections([]) })
+        return () => { cancelled = true }
+      }, [open])
+
+      useEffect(() => {
+        if (open) barRef.current?.focus?.()
+      }, [open])
+
+      const sync = useCallback((names) => {
+        api('composer-scope', { action: 'set', sessionId, names }).catch(() => {})
+      }, [sessionId])
+
+      const toggleName = useCallback((name) => {
+        sync(KB_SCOPE_STORE.toggle(sessionId, name))
+      }, [sessionId, sync])
+
+      const close = useCallback(() => {
+        KB_SCOPE_STORE.setOpen(sessionId, false)
+      }, [sessionId])
+
+      if (!open) return null
+
+      const list = collections ?? []
+      const cursorSafe = list.length === 0 ? 0 : Math.min(cursor, list.length - 1)
+      const totalChunks = list
+        .filter((c) => selected.includes(String(c.name)))
+        .reduce((sum, c) => sum + (Number(c.chunks) || 0), 0)
+
+      const onKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation(); close(); return
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault(); e.stopPropagation()
+          if (list.length === 0) return
+          setCursor((cur) => {
+            const base = Math.min(cur, list.length - 1)
+            const delta = e.key === 'ArrowDown' ? 1 : -1
+            return (base + delta + list.length) % list.length
+          })
+          return
+        }
+        if (e.key === ' ' || e.key === 'Tab') {
+          e.preventDefault(); e.stopPropagation()
+          const row = list[cursorSafe]
+          if (row) toggleName(String(row.name))
+        }
+      }
+
+      return h('div', {
+        ref: barRef,
+        tabIndex: -1,
+        className: 'kb-scope-bar',
+        onKeyDown,
+        role: 'group',
+        'aria-label': t('composer.group'),
+      },
+        h('div', { className: 'kb-scope-main' },
+          h('span', {
+            className: 'kb-scope-count',
+            'data-on': selected.length > 0 ? 'true' : 'false',
+          }, String(selected.length)),
+          h(KnowledgeIcon, { size: 13, active: false }),
+          h('span', { className: 'kb-scope-title' }, t('composer.group')),
+          h('div', { className: 'kb-scope-chips' },
+            selected.length === 0
+              ? h('span', { className: 'kb-scope-hint' }, t('composer.pickHint'))
+              : selected.map((name) => h('button', {
+                  key: name,
+                  className: 'kb-scope-chip',
+                  onClick: () => toggleName(name),
+                  title: t('composer.remove'),
+                }, name, h('span', { className: 'kb-scope-chip-x' }, '×'))),
+          ),
+          selected.length > 0
+            ? h('span', { className: 'kb-scope-meta' }, fmt(t('composer.chunks'), { n: totalChunks }))
+            : null,
+        ),
+        h('div', { className: 'kb-scope-list' },
+          collections === null
+            ? h('div', { className: 'kb-scope-empty' }, t('common.loading'))
+            : list.length === 0
+              ? h('div', { className: 'kb-scope-empty' }, t('composer.empty'))
+              : list.map((c, index) => {
+                  const name = String(c.name)
+                  const on = selected.includes(name)
+                  return h('button', {
+                    key: name,
+                    className: 'kb-scope-row' + (on ? ' kb-scope-row-on' : '') + (index === cursorSafe ? ' kb-scope-row-cur' : ''),
+                    onMouseEnter: () => setCursor(index),
+                    onClick: () => toggleName(name),
+                  },
+                    h('span', { className: 'kb-scope-check' }, on ? '\u2713' : ''),
+                    h('span', { className: 'kb-scope-name' }, name),
+                    h('span', { className: 'kb-scope-docs' }, fmt(t('composer.docs'), { n: Number(c.document_count ?? c.documents) || 0 })),
+                  )
+                }),
+        ),
+        h('div', { className: 'kb-scope-foot' },
+          h('span', { className: 'kb-scope-keys' },
+            h('kbd', null, 'Esc'), ' ', t('composer.keyClose'), '  ',
+            h('kbd', null, '\u2191\u2193'), ' ', t('composer.keyMove'), '  ',
+            h('kbd', null, 'Tab'), ' ', t('composer.keyToggle'),
+          ),
+          h('button', { className: 'kb-scope-close', onClick: close }, t('composer.done')),
+        ),
+      )
+    }
+
     /* ══════════════════════════ 注册 ══════════════════════════ */
 
     return {
@@ -5582,6 +6009,12 @@ window.__ModuleLoader__.load({
         }
         // inject 是较新的 API，老版本直接 register 也能工作
         const canInject = typeof slots.inject === 'function'
+
+        /*
+         * 样式在插件加载时就注入，不等面板挂载。
+         * 选择条渲染在对话页，主面板当时未必打开过。
+         */
+        ctx.effect(() => installStyles(), 'dsh-knowbase: styles')
 
 
         /*
@@ -5747,6 +6180,52 @@ window.__ModuleLoader__.load({
           }
 
           return triggers.registerSource(source)
+        })
+
+        /*
+         * ── 输入框上方的知识库选择条 ──
+         *
+         * 挂在 conversation.input.dock（「输入框卡片上方的全宽条目」），
+         * 由 /知识库 命令展开或收起。常驻注册、收起时渲染 null，
+         * 这样键盘焦点与状态都留在组件内部。
+         */
+        if (typeof slots.inject === 'function') {
+          slots.inject('conversation.input.dock', () =>
+            slots.register(
+              {
+                name: 'conversation.input.dock',
+                id: 'dsh-knowbase-scope',
+                order: 12,
+                inject: (sessionId) => ({ sessionId }),
+              },
+              KbScopeBar,
+            ),
+          )
+        }
+
+        /*
+         * ── `/` 菜单里的「知识库」这一项 ──
+         *
+         * 点它只做一件事：把选择条展开（或收起）。
+         * 具体选哪些库由选择条里的交互决定，不占用草稿文字。
+         */
+        ctx.inject(['commandUi'], (scope) => {
+          const commandUi = scope.commandUi
+          if (typeof commandUi?.register !== 'function') return undefined
+
+          return commandUi.register({
+            name: 'kb',
+            label: () => translate('composer.group'),
+            description: () => translate('composer.openDesc'),
+            available: () => true,
+            ui: {
+              kind: 'action',
+              run(session) {
+                const id = String(session?.sessionId ?? 'current')
+                KB_SCOPE_STORE.setOpen(id, !KB_SCOPE_STORE.isOpen(id))
+              },
+            },
+          })
         })
 
         ctx.inject(['sidebarRightTabs'], (scope) => {
