@@ -26,6 +26,7 @@ import { registerTools } from './lib/tools.js'
 import { buildSkill } from './lib/skill.js'
 import { sha256Of } from './lib/models.js'
 import { checkCore, describeCapabilities } from './lib/compat.js'
+import { KB_REF_PREFIX, stripKbRefs, formatInjection, formatFailureNote } from './lib/composer.js'
 import { isPrivateHost, checkRobots, waitForSlot } from './lib/fetch-policy.js'
 import { sourceForHost, sourcesByTopic } from './lib/sources.js'
 import {
@@ -39,7 +40,7 @@ import {
   hashText,
 } from './lib/embed.js'
 
-const VERSION = '0.6.1'
+const VERSION = '0.6.5'
 const STAGE = 'RC'
 
 /** 单文件大小上限：50MB */
@@ -1635,6 +1636,92 @@ this.store.deleteDocument(id)
     }
   }
 
+  /* ────────────────────── 对话内选库 → 自动检索 ────────────────────── */
+
+  /**
+   * 用户从输入框的 `@` 菜单选了知识库时，在提问真正进入模型之前
+   * 把该库的检索结果注入这一轮上下文。
+   *
+   * 这是「问题向量化 → 相似度检索 → 增强提示」三步的落地：
+   * 检索复用 semanticSearch（向量 + 关键词 + RRF + 可选重排），
+   * 注入则改写成一条内容更完整的 user 消息。
+   *
+   * @param {readonly object[]} messages 本轮将要进入模型的消息
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<{ messages: object[], names: string[] } | null>}
+   *   没有 `@kb:` 标记时返回 null（调用方原样放行）。
+   */
+  async buildComposerInjection(messages, signal) {
+    const list = Array.isArray(messages) ? messages : []
+    const last = list[list.length - 1]
+    if (last?.role !== 'user' || !Array.isArray(last.content)) return null
+
+    const textBlocks = last.content.filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    const otherBlocks = last.content.filter((b) => b?.type !== 'text')
+    if (textBlocks.length === 0) return null
+
+    const combined = textBlocks.map((b) => b.text).join('\n')
+    if (!combined.includes(KB_REF_PREFIX)) return null
+
+    // 用已知库名精确匹配，带空格的库名才认得出来
+    const knownNames = this.store.listCollections().map((c) => c.name)
+    const { text: question, names } = stripKbRefs(combined, { knownNames })
+    if (names.length === 0) return null
+
+    if (signal?.aborted) return null
+
+    const collections = []
+    const results = []
+    const failures = []
+
+    for (const name of names) {
+      const collection = this.resolveCollection(name)
+      if (!collection) {
+        failures.push(`「${name}」不存在`)
+        continue
+      }
+      collections.push({ name: collection.name })
+
+      try {
+        const found = await this.semanticSearch(question === '' ? collection.name : question, {
+          collectionId: collection.id,
+        })
+        results.push({
+          collection: collection.name,
+          hits: found.hits ?? [],
+          note: found.note ?? (found.mode === 'keyword' ? '当前仅用关键词检索' : undefined),
+        })
+      } catch (error) {
+        failures.push(`「${collection.name}」检索失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+
+    if (collections.length === 0 && failures.length === 0) return null
+
+    const blocks = []
+    if (collections.length > 0) {
+      blocks.push(formatInjection({ collections, results }))
+    }
+    if (failures.length > 0) {
+      blocks.push(formatFailureNote(names, failures.join('；')))
+    }
+    const injected = blocks.filter((b) => b !== '').join('\n\n')
+    if (injected === '') return null
+
+    const head = question === '' ? '（用户只选了知识库，没有额外问题）' : question
+    const next = {
+      ...last,
+      content: [
+        { type: 'text', text: `${head}\n\n${injected}` },
+        ...otherBlocks,
+      ],
+    }
+
+    return { messages: [...list.slice(0, -1), next], names: collections.map((c) => c.name) }
+  }
+
+  /* ────────────────────── 对话内选库结束 ────────────────────── */
+
   /* ────────────────────── 兼容性诊断 ────────────────────── */
 
   /**
@@ -2139,6 +2226,25 @@ export function apply(ctx, config) {
     kb.start()
     return () => kb.stop()
   }, 'dsh-knowbase: lifecycle')
+
+  /* ── 对话内选库：提问前自动检索并注入 ── */
+  ctx.on('agent/pre-step', async (payload, next) => {
+    const decision = await next()
+    // 只有真正要进入下一步时才处理；reject 原样放行
+    if (decision?.kind !== 'enter') return decision
+
+    try {
+      const injected = await kb.buildComposerInjection(decision.messages, payload?.signal)
+      if (injected === null) return decision
+      return { ...decision, messages: injected.messages }
+    } catch {
+      /*
+       * 注入失败绝不阻断提问。
+       * 用户选库是想让答案更准，不是想让消息发不出去。
+       */
+      return decision
+    }
+  })
 
   /* ── 智能体工具：让模型能自己查库、导入、抓资料 ── */
   ctx.inject(['tools'], (scope) => {

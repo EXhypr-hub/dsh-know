@@ -1791,6 +1791,142 @@ await test('测速结论覆盖所有设备组合', async () => {
   ok('测速结论覆盖所有设备组合', '5 种设备组合都给出明确结论，结果单独成行显示')
 })
 
+await test('对话选库：标记解析', async () => {
+  const { extractKbRefs, stripKbRefs } = await import('../lib/composer.js')
+
+  // 基本提取
+  const one = extractKbRefs('@kb:粉毛 第一个视频讲了什么')
+  if (one.length !== 1 || one[0].name !== '粉毛') throw new Error('单引用提取失败')
+
+  // 多引用按出现顺序
+  const two = extractKbRefs('看看 @kb:粉毛 和 @kb:默认知识库 各怎么说')
+  if (two.map((r) => r.name).join(',') !== '粉毛,默认知识库') {
+    throw new Error(`多引用顺序错：${two.map((r) => r.name).join(',')}`)
+  }
+
+  // 同一库引用多次只算一次（避免重复检索）
+  if (extractKbRefs('@kb:粉毛 和 @kb:粉毛').length !== 1) throw new Error('重复引用未去重')
+
+  // 中文标点要能终止库名
+  if (extractKbRefs('@kb:粉毛，请解释')[0]?.name !== '粉毛') throw new Error('中文逗号未终止库名')
+  if (extractKbRefs('@kb:粉毛。谢谢')[0]?.name !== '粉毛') throw new Error('中文句号未终止库名')
+
+  // 裸前缀不算引用
+  if (extractKbRefs('@kb:').length !== 0) throw new Error('裸 @kb: 被当成引用')
+
+  // 无引用
+  if (extractKbRefs('没有引用的一句话').length !== 0) throw new Error('无引用时不该有结果')
+
+  // 库名含空格：靠 knownNames 精确匹配
+  const spaced = extractKbRefs('@kb:我的 资料库 总结', { knownNames: ['我的 资料库'] })
+  if (spaced[0]?.name !== '我的 资料库') throw new Error('带空格的库名未精确匹配')
+
+  // 前缀相似时取更长的名字，否则「粉毛」会吃掉「粉毛拉丁」
+  const longer = extractKbRefs('@kb:粉毛拉丁 x', { knownNames: ['粉毛', '粉毛拉丁'] })
+  if (longer[0]?.name !== '粉毛拉丁') throw new Error('长库名未优先匹配')
+
+  ok('对话选库：标记解析', '单/多/重复/中文标点/空格库名/长名优先 均正确')
+})
+
+await test('对话选库：标记剥离', async () => {
+  const { stripKbRefs } = await import('../lib/composer.js')
+
+  const cases = [
+    ['@kb:粉毛 第一个视频讲了什么', '第一个视频讲了什么'],
+    ['看看 @kb:粉毛 和 @kb:默认知识库 各怎么说', '看看 和 各怎么说'],
+    // 引用被删后不能留下孤零零的标点
+    ['@kb:粉毛，请解释', '请解释'],
+    ['@kb:粉毛。谢谢', '谢谢'],
+    ['@kb:粉毛', ''],
+    ['没有引用的一句话', '没有引用的一句话'],
+  ]
+
+  for (const [input, expect] of cases) {
+    const got = stripKbRefs(input).text
+    if (got !== expect) {
+      throw new Error(`${JSON.stringify(input)} → ${JSON.stringify(got)}，期望 ${JSON.stringify(expect)}`)
+    }
+  }
+
+  // names 要带出来，供上层检索
+  const { names } = stripKbRefs('@kb:甲乙 @kb:丙丁 提问')
+  if (names.join(',') !== '甲乙,丙丁') throw new Error(`names 不对：${names.join(',')}`)
+
+  ok('对话选库：标记剥离', '去标记后无残留标点，正文与库名都正确')
+})
+
+await test('对话选库：注入文本', async () => {
+  const { formatInjection, formatFailureNote } = await import('../lib/composer.js')
+
+  const text = formatInjection({
+    collections: [{ name: '粉毛' }],
+    results: [{
+      collection: '粉毛',
+      hits: [{
+        title: '网哲TV1-2',
+        page: 12,
+        heading: '10.1 第 1 期',
+        text: '视频最有价值的不是物理学部分。',
+      }],
+    }],
+  })
+
+  if (!/网哲TV1-2/.test(text)) throw new Error('注入文本缺文档名')
+  if (!/第 12 页/.test(text)) throw new Error('注入文本缺页码')
+  if (!/仅依据以上资料回答/.test(text)) throw new Error('缺「仅依据资料」约束')
+  if (!/标注文档名与页码/.test(text)) throw new Error('缺引用要求')
+
+  // 无命中时必须明确让模型别编
+  const empty = formatInjection({ collections: [{ name: '空库' }], results: [{ collection: '空库', hits: [] }] })
+  if (!/未检索到/.test(empty)) throw new Error('无命中时没说明')
+  if (!/不要凭记忆编造/.test(empty)) throw new Error('无命中时缺防编造约束')
+
+  // 超长要截断并注明，不能让上下文被撑爆
+  const long = formatInjection({
+    collections: [{ name: 'A' }],
+    results: [{ collection: 'A', hits: [{ title: 'T', text: 'x'.repeat(9000) }] }],
+    limit: 600,
+  })
+  if (!/已截断/.test(long)) throw new Error('超长未标注截断')
+  if (long.length > 900) throw new Error(`截断后仍然过长：${long.length}`)
+
+  // 失败说明要能读，且含库名与原因
+  const note = formatFailureNote(['粉毛'], '库不存在')
+  if (!/粉毛/.test(note) || !/库不存在/.test(note)) throw new Error('失败说明不完整')
+
+  ok('对话选库：注入文本', '出处/约束/无命中/超长截断/失败说明 均覆盖')
+})
+
+await test('对话选库：Host 注入不阻断', async () => {
+  const { readFileSync } = await import('node:fs')
+  const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+
+  // Host 必须监听 pre-step，且异常时原样放行
+  if (!/ctx\.on\('agent\/pre-step'/.test(host)) throw new Error('Host 没有监听 agent/pre-step')
+  if (!/kind !== 'enter'/.test(host)) throw new Error('pre-step 没有区分 reject 与 enter')
+  if (!/catch \{[\s\S]{0,400}?return decision/.test(host)) {
+    throw new Error('注入失败时没有原样放行，可能阻断提问')
+  }
+
+  // 没有标记时必须提前返回 null，不做任何检索
+  if (!/if \(!combined\.includes\(KB_REF_PREFIX\)\) return null/.test(host)) {
+    throw new Error('没有标记时没短路，会白跑检索')
+  }
+
+  // 客户端要注册 @ 来源，且缺 inputTriggers 时跳过而不是崩
+  if (!/trigger: '@'/.test(client)) throw new Error('客户端没有注册 @ 来源')
+  if (!/typeof triggers\?\.registerSource !== 'function'/.test(client)) {
+    throw new Error('缺 inputTriggers 时没有降级')
+  }
+
+  // 引用在剪贴板与模型文本里必须同一形态，否则 Host 解析不到
+  if (!/clipboardText: \(ref\) => ref/.test(client)) throw new Error('clipboardText 与 ref 不一致')
+  if (!/serialize: async \(ref\) => ref/.test(client)) throw new Error('serialize 与 ref 不一致')
+
+  ok('对话选库：Host 注入不阻断', 'pre-step 已接，无标记短路，异常放行，引用形态一致')
+})
+
 /* ───────────────── 收尾 ───────────────── */
 
 await rm(workDir, { recursive: true, force: true })

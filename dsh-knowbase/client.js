@@ -1325,6 +1325,8 @@ window.__ModuleLoader__.load({
     const DICT = {
   zh: {
     /* 顶栏 */
+    'composer.group': '知识库',
+    'composer.docs': '{n} 份文档',
     'recall.emptyTitle': '输入查询语句开始检索测试',
     'recall.emptyHint': '结果将展示匹配的文档片段和分数',
     'settings.saved': '已保存',
@@ -1534,6 +1536,8 @@ window.__ModuleLoader__.load({
   },
 
   en: {
+    'composer.group': 'Knowledge base',
+    'composer.docs': '{n} documents',
     'recall.emptyTitle': 'Enter a query to start testing',
     'recall.emptyHint': 'Results show the matching chunks and their scores',
     'settings.saved': 'Saved',
@@ -5645,6 +5649,106 @@ window.__ModuleLoader__.load({
         }
 
         /* ── 右侧栏：聊天时可并排搜索 ── */
+        /*
+         * ── 输入框里用 @ 选知识库 ──
+         *
+         * 选中后往草稿里插入 `@kb:库名`。Host 在 agent/pre-step 里
+         * 解析这个标记、检索该库、把命中片段注入本轮上下文，
+         * 于是提问时自动「向量化 → 相似度检索 → 增强提示」。
+         *
+         * 旧版 DSH 没有 inputTriggers 服务时整段跳过，
+         * 插件其余功能不受影响。
+         */
+        ctx.inject(['inputTriggers'], (scope) => {
+          const triggers = scope.inputTriggers
+          if (typeof triggers?.registerSource !== 'function') return undefined
+
+          /** 库列表缓存：@ 菜单与行内装饰都读它 */
+          const shelf = { collections: [] }
+          let inflight = null
+
+          const loadCollections = () => {
+            if (inflight !== null) return inflight
+            inflight = api('collections', { action: 'list' })
+              .then((value) => {
+                shelf.collections = Array.isArray(value) ? value : []
+                return shelf.collections
+              })
+              .catch(() => shelf.collections)
+              .finally(() => { inflight = null })
+            return inflight
+          }
+
+          const countOf = (collection) => {
+            const n = collection?.document_count ?? collection?.documents ?? 0
+            return Number.isFinite(n) ? n : 0
+          }
+
+          const source = {
+            trigger: '@',
+            name: translate('composer.group'),
+            order: 5,
+            showGroupTitle: true,
+
+            /* 会话建立时先拉一次，第一次打开菜单就不用等 */
+            warm() { loadCollections() },
+
+            async candidates(_session, req) {
+              const list = await loadCollections()
+              const query = String(req?.query ?? '').trim().toLowerCase()
+              return list
+                .filter((c) => query === '' || String(c.name ?? '').toLowerCase().includes(query))
+                .map((c) => ({
+                  // name 是候选的唯一标识，也参与搜索匹配
+                  name: `kb:${c.name}`,
+                  label: String(c.name ?? ''),
+                  description: fmt(translate('composer.docs'), { n: countOf(c) }),
+                  value: String(c.name ?? ''),
+                }))
+            },
+
+            /*
+             * 引用在草稿里、剪贴板里、以及发给模型的文本里都保持同一个形态。
+             * 三者一致才能让 Host 用同一个正则解析，也让复制粘贴能还原。
+             */
+            codec: {
+              clipboardText: (ref) => ref,
+              serialize: async (ref) => ref,
+            },
+
+            onPick({ candidate }) {
+              const name = candidate.value ?? candidate.label ?? ''
+              if (name === '') return undefined
+              const ref = `@kb:${name}`
+              return {
+                insert: {
+                  source: 'dsh-knowbase',
+                  ref,
+                  label: candidate.label ?? name,
+                  clipboardText: ref,
+                },
+              }
+            },
+
+            /* 行内装饰用它认 token；不含前导 @ */
+            lexicon() {
+              return shelf.collections.map((c) => `kb:${c.name}`)
+            },
+
+            subscribeLexicon(_session, listener) {
+              // 库列表变化后重新装饰；拉取失败时也通知一次，避免一直不刷新
+              const timer = setTimeout(() => {
+                loadCollections().finally(() => {
+                  try { listener() } catch { /* 忽略 */ }
+                })
+              }, 0)
+              return () => clearTimeout(timer)
+            },
+          }
+
+          return triggers.registerSource(source)
+        })
+
         ctx.inject(['sidebarRightTabs'], (scope) => {
           const tabs = scope.sidebarRightTabs
           if (tabs === undefined || typeof tabs.register !== 'function') return

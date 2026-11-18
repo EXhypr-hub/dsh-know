@@ -39,6 +39,7 @@ DSH 安装目录自带权威的升级指南：`docs/upgrade-guide/`
 | `ctx.slots.register({...}, Comp)` | 左侧栏图标与主面板 | **关键** |
 | `ctx.slots.inject(owner, fn)` | 随声明塌陷自动清理/重装 | 可选（缺失时直接 register） |
 | `ctx.locale.register/bind` | 中英文界面 | 可选（缺失时用内置中文） |
+| `ctx.inputTriggers.registerSource(src)` | 输入框 `@` 选知识库 | 可选（缺失时隐藏该入口，其余功能正常） |
 | `ctx.inject(['sidebarRightTabs'], ...)` | 对话旁的右侧栏面板 | 可选（缺失时跳过） |
 | `require('react')` | 组件运行时 | **关键**（浏览器模块表自带，不重复安装） |
 
