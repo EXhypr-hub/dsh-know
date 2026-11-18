@@ -8,6 +8,10 @@
   <em>文档还在你手里 · 检索全在本机 · 答案有据可查</em>
 </p>
 
+<p align="center">
+  <img src="dsh-knowbase/docs/screenshot.svg" alt="dsh-knowbase 界面：知识库面板与对话内选库" width="100%">
+</p>
+
 ---
 
 > ## ✅ 当前状态：v0.6.8 已发布

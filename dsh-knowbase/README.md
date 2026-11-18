@@ -4,6 +4,10 @@ DeepSeek Harness 的本地知识库插件。文档导入、语义检索、权威
 
 > **状态**：v0.6.8，六个开发阶段均已完成，功能可用。
 
+<p align="center">
+  <img src="docs/screenshot.svg" alt="dsh-knowbase 界面：知识库面板与对话内选库" width="100%">
+</p>
+
 ## 目录结构
 
 ```
